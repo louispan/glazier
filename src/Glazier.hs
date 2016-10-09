@@ -16,6 +16,7 @@
 --
 -- The Elm View/Update is basically as follows:
 --
+-- @
 -- data Model = Blah....
 -- data Action = DoThis | DoThat deriving Show
 --
@@ -24,6 +25,7 @@
 --
 -- -- | The widget from 'view' knows how to send Action to a mailbox
 -- view :: Signal Address -> Model -> Html
+-- @
 --
 -- This module uses isomorphic implementations Update and View resulting in instances can be be composed together into larger Widgets.
 -- Original inspiration from https://arianvp.me/lenses-and-prisms-for-modular-clientside-apps/
@@ -67,10 +69,14 @@ import Prelude hiding (id, (.))
 
 -------------------------------------------------------------------------------
 
--- | The Elm view function is (s -> v).
--- This is isomorphic to @(->) s @ Reader,
--- whose instances of Functor, Applicative and Monad can be used to change the
--- render type.
+-- | The Elm view function is basically @view :: model -> html@
+-- NB. elm-html is actually @view :: Signal.Address action -> model -> html@
+-- where @Signal.Address action@ is the Pipes.Concurrent.Output that is sent
+-- actions (eg. when html button is clicked).
+-- This address argument is not required in the general case, and is only required for specific widgets on an as needed basis.
+-- Therefore, using the fundamental type of @view :: model -> html@, this is
+-- isomorphic to @(->) s @ Reader, whose instances of Functor, Applicative
+-- and Monad can be used to change the render type.
 newtype View s v = View { getView :: s -> v }
   deriving (MonadReader s, Monad, Applicative, Functor, Semigroup, Monoid)
 

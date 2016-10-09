@@ -9,6 +9,7 @@ based on the [deprecated Elm Architecture version of Jan 2016](https://github.co
 
 The Elm View/Update is basically as follows:
 
+```
 data Model = Blah....
 data Action = DoThis | DoThat deriving Show
 
@@ -17,6 +18,7 @@ update :: Action -> Model -> Model
 
 -- | The widget from 'view' knows how to send Action to a mailbox
 view :: Signal Address -> Model -> Html
+```
 
 This module uses isomorphic implementations Update and View resulting in instances that can be be composed together into larger Widgets.
 Original inspiration from https://arianvp.me/lenses-and-prisms-for-modular-clientside-apps/
