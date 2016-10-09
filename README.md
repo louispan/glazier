@@ -18,7 +18,7 @@ update :: Action -> Model -> Model
 -- | The widget from 'view' knows how to send Action to a mailbox
 view :: Signal Address -> Model -> Html
 
-This module uses isomorphic implementations Update and View resulting in instances can be be composed together into larger Widgets.
+This module uses isomorphic implementations Update and View resulting in instances that can be be composed together into larger Widgets.
 Original inspiration from https://arianvp.me/lenses-and-prisms-for-modular-clientside-apps/
 
 This framework provides three main combinators:
