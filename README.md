@@ -2,9 +2,10 @@ Functional version of (Elm Update/View & startApp architecture) enabling composa
 
 See [Example.hs](src/Example.hs) for example usage.
 
+See [glazier-tutorial](https://github.com/louispan/glazier-tutorial/blob/08d24800c58c6ec683b618bf2e4061e58aac1753/src/Glazier/Tutorial/Console.hs#L193) for a working console example.
+
 This framework makes it easier to modularize the Elm architecture idea of View/Update:
-based on the deprecated Elm Architecture version of Jan 2016
-https://github.com/evancz/elm-architecture-tutorial/tree/de5682a5a8e4459aed4637533adb25e462f8a2ae
+based on the [deprecated Elm Architecture version of Jan 2016](https://github.com/evancz/elm-architecture-tutorial/tree/de5682a5a8e4459aed4637533adb25e462f8a2ae)
 
 The Elm View/Update is basically as follows:
 
