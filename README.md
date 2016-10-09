@@ -1,0 +1,26 @@
+Functional version of (Elm Update/View & startApp architecture) enabling composable widgets, and a FRP-like framework.
+
+See [Example.hs](src/Example.hs) for example usage.
+
+This framework makes it easier to modularize the Elm architecture idea of View/Update:
+based on the deprecated Elm Architecture version of Jan 2016
+https://github.com/evancz/elm-architecture-tutorial/tree/de5682a5a8e4459aed4637533adb25e462f8a2ae
+
+The Elm View/Update is basically as follows:
+
+data Model = Blah....
+data Action = DoThis | DoThat deriving Show
+
+-- | update is fired from an event processing loop
+update :: Action -> Model -> Model
+
+-- | The widget from 'view' knows how to send Action to a mailbox
+view :: Signal Address -> Model -> Html
+
+This module uses isomorphic implementations Update and View resulting in instances can be be composed together into larger Widgets.
+Original inspiration from https://arianvp.me/lenses-and-prisms-for-modular-clientside-apps/
+
+This framework provides three main combinators:
+* Semigroup and Monoid instances for concatenating widgets.
+* 'dispatch' is used to re-route the action type.
+* 'implant' is used to modify the model type.
