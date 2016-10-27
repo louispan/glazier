@@ -1,5 +1,7 @@
 Functional version of (Elm Update/View & startApp architecture) enabling composable widgets, and a FRP-like framework.
 
+See [slides](http://www.slideshare.net/LouisPan3/composable-widgets-with-reactive-pipes)
+
 See [Example.hs](src/Example.hs) for example usage.
 
 See [glazier-tutorial](https://github.com/louispan/glazier-tutorial/blob/08d24800c58c6ec683b618bf2e4061e58aac1753/src/Glazier/Tutorial/Console.hs#L193) for a working console example.
