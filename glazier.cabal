@@ -1,5 +1,5 @@
 name:                glazier
-version:             0.1.0.0
+version:             0.1.1.0
 synopsis:            Functional version of (Elm Update/View & startApp architecture) enabling composable widgets, and a FRP-like framework
 description:         Please see README.md
 homepage:            https://github.com/louispan/glazier#readme

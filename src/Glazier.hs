@@ -47,6 +47,7 @@ module Glazier
     , statically
     , dynamically
     , startWidget
+    , startWidget'
     , Implanted
     , Implant(..)
     , Dispatch(..)
@@ -223,22 +224,26 @@ dynamically v = Widget v mempty
 -- This uses the input Widget and input monad to result in a @StateT s m@ that:
 -- * gets actions from an input monad,
 -- * run the actions through the widget update to store the updated model,
--- * runs the model through the widget view,
--- * returns commands and rendered views.
--- This can be used in the getTick argument to 'runUpdate'.
-startWidget :: Monad m => Widget a s c v -> m a -> StateT s m (c, v)
-startWidget w signal =
-  let u = _widgetUpdate w
-      v = _widgetView w
-      rs = runReaderM (getUpdate u) signal
-      -- add the transformed view to the state output
-      -- read from inbox of actions, and apply to Update
-      -- applyView :: Monad m => m (c, s) -> m ((c, v), s)
-      applyView m = do
-        (c, s) <- m
-        pure ((c, getView v s), s)
-  in mapStateT applyView rs
+-- * returns commands
+-- The View returned as a function so that the frame can be rendered on demand
+-- using the state from the StateT.
+startWidget' :: Monad m => Widget a s c v -> m a -> (StateT s m c, s -> v)
+startWidget' w signal = (rs, v)
+ where
+  u = _widgetUpdate w
+  v = getView $ _widgetView w
+  -- read from inbox of actions, and apply to Update
+  rs = runReaderM (getUpdate u) signal
 
+-- | A different form of startWidget' which returns the view fully applied
+-- for simpler applications that renders every frame.
+startWidget :: Monad m => Widget a s c v -> m a -> StateT s m (c, v)
+startWidget w signal = do
+    c <- rs
+    s <- get
+    pure (c, k s)
+  where
+      (rs, k) = startWidget' w signal
 -------------------------------------------------------------------------------
 
 -- | magnify can be used to modify the action inside an Update
