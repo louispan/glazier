@@ -63,18 +63,18 @@ instance AsSet (Set a) a where
 -- modify the state if the preview of the prism is not Nothing.
 -- The view will be mempty if the model is Nothing.
 optionalExample ::
-  ( Monoid v
+  ( Monoid d
   , Monoid c
   -- , AsProxy a "Reset"
   -- , AsTagged a "Map" (Maybe a2 -> Maybe a2)
   -- , AsPrism a a1
-  , Semigroup v
+  , Semigroup d
   , Semigroup c
   , AsSet a a2
   , AsReset a
   , AsAction a (Maybe a2 -> Maybe a2)
   )
-  => Prism' a a1 -> Widget a1 a2 c v -> Widget a (Maybe a2) c v
+  => Prism' a a1 -> Widget a1 a2 c d -> Widget a (Maybe a2) c d
 optionalExample p w =
      (
      implant _Just -- original update will only work if model is Just
@@ -82,10 +82,10 @@ optionalExample p w =
      ) w
   <> statically mempty -- change mempty to specify a rendering function when Nothing
   <> dynamically
-    (  dispatch _Set      (updateRS' $ const . Just . getSet)
-    <> dispatch _Action   (updateRS' getAction)
+    (  dispatch _Set      (mkNotifyRS' $ const . Just . getSet)
+    <> dispatch _Action   (mkNotifyRS' getAction)
     -- <> dispatch (_Tagged (Proxy :: Proxy "Map")) (updateRS' unTagged)
-    <> dispatch _Reset    (updateRS' . const $ const Nothing)
+    <> dispatch _Reset    (mkNotifyRS' . const $ const Nothing)
     -- <> dispatch (_Proxy (Proxy :: Proxy "Reset")) (updateRS' . const $ const Nothing)
     )
 
@@ -101,9 +101,9 @@ optionalExample p w =
 -- modify the state of the head.
 -- The view will be mempty if Nil.
 listExample ::
-  ( Monoid v
+  ( Monoid d
   , Monoid c
-  , Semigroup v
+  , Semigroup d
   , Semigroup c
   -- , AsPrism b a
   -- , AsProxy a "Tail"
@@ -113,19 +113,19 @@ listExample ::
   -- , AsTagged a "Map" ([s] -> [s])
   , AsAction a ([s] -> [s])
   )
-  => Prism' b a -> Widget a s c v -> Widget b [s] c v
-listExample p (Widget u (View v)) =
+  => Prism' b a -> Widget a s c d -> Widget b [s] c d
+listExample p (Widget u (Depict d)) =
      -- Create a list rendering function by
      -- interspercing the separator with the View from the original widget.
-     statically (View $ \ss -> fold $ intersperse separator $ fmap v ss)
+     statically (Depict $ \ss -> fold $ intersperse separator $ fmap d ss)
   <> dynamically
     (  implant (ix 0) u -- original update will only work on the head of list
     -- <> dispatch (_Proxy (Proxy :: Proxy "Tail")) (updateRS' . const $ tail)
-    <> dispatch _Tail   (updateRS' . const $ tail)
+    <> dispatch _Tail   (mkNotifyRS' . const $ tail)
     -- <> dispatch (_Tagged (Proxy :: Proxy "Cons")) (updateRS' $ (:) . unTagged)
-    <> dispatch _ConsAction (updateRS' $ (:) . getConsAction)
+    <> dispatch _ConsAction (mkNotifyRS' $ (:) . getConsAction)
     -- <> dispatch (_Tagged (Proxy :: Proxy "Map")) (updateRS' unTagged)
-    <> dispatch _Action (updateRS' getAction)
+    <> dispatch _Action (mkNotifyRS' getAction)
     )
   & dispatch p -- make original action part of a smaller action
  where separator = mempty -- change mempty to specify a rendering function
@@ -140,36 +140,36 @@ listExample p (Widget u (View v)) =
 indexedExample ::
   ( Functor t
   , Foldable t
-  , Monoid v
+  , Monoid d
   , Monoid c
   , Field2 b b a a
   , Field1 b b (Index (t s)) (Index (t s))
   , Ixed (t s)
-  , Semigroup v
+  , Semigroup d
   , Semigroup c
   -- , AsPrism b a
   -- , AsTagged b "Map" (t s -> t s)
   , AsAction b (t s -> t s)
   , IxValue (t s) ~ s
   )
-  => Widget a s c v -> Widget b (t s) c v
-indexedExample (Widget (Update u) (View v)) =
+  => Widget a s c d -> Widget b (t s) c d
+indexedExample (Widget (Notify u) (Depict d)) =
      -- Create a rendering function by folding the original view function
-    statically (View $ \ss -> fold (fmap v ss))
+    statically (Depict $ \ss -> fold (fmap d ss))
   <>
     dynamically
     (
        -- This effectively dispatches the Update
        -- ie the action type has changed
        -- so a @dispatch prism@ is not required
-       (Update $ do
-         r <- ask
-         let k = r ^. _1
-             a = r ^. _2
+       (Notify $ do
+         x <- ask
+         let k = x ^. _1
+             a = x ^. _2
          -- run u but for a state implantded by ix k
          lift $ zoom (ix k) (runReaderT u a)
        )
     <>
       -- dispatch (_Tagged (Proxy :: Proxy "Map")) (updateRS' unTagged)
-      dispatch _Action (updateRS' getAction)
+      dispatch _Action (mkNotifyRS' getAction)
     )
