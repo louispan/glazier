@@ -1,33 +1,10 @@
 module Glazier.App where
 
 import Control.Lens
-import Control.Monad.Except
 import Control.Monad.Morph
-import Control.Monad.Reader
+import Control.Monad.Trans.Reader.Extras
 import Control.Monad.State.Strict
-import Control.Monad.Trans.Maybe
 import Glazier.Core
-
--- | This function combines two different monadic effects.
---
--- This can enable past-Dependence.
--- Elm has foldp : (a -> state -> state) -> state -> Signal a -> Signal state
--- This is equivalent to a creating a @StateT state (Signal m) ()@
---
--- 'runReaderM' is a more general form of @StateT state (Signal m) ()@ where
--- given a reader monad to transform "a" to "c" with effects, and an "as"
--- monad that produces "a"s with other effects, run the result of "as" through
--- the reader monad to produce "c"s with both effects.
--- @
--- runReaderM :: Monad m => Reader a (State s) c -> m a                      -> StateT s m c
--- runReaderM ::            Reader a (State s) c -> Signal STM a             -> StateT state (Signal STM) c
--- runReaderM ::            Reader a (State s) c -> Pipes.Concurrent.Input a -> StateT state Pipes.Concurrent.Input c
--- @
-runReaderM :: (Monad m, Monad (t m), MonadTrans t, MFunctor t)
-  => ReaderT a (t Identity) c -> m a -> t m c
-runReaderM c as = do
-  a <- lift as
-  hoist generalize $ runReaderT c a
 
 -- | Runs one tick of the notify processing, given handler functions, and stores
 -- the updated state of the model.
@@ -45,30 +22,20 @@ runReaderM c as = do
 --        (xs, render) = G.startWidget (appWidget mkCtl) inbox
 --        tickState = hoist (MaybeT . liftIO . atomically . PC.recv) xs
 -- @
-runNotify ::
-  (Monad m, MonadError s m) =>
-  (s -> MaybeT m ())
-  -> (cmds -> MaybeT m ())
-  -> StateT s (MaybeT m) cmds
-  -> StateT s m ()
-runNotify onFrame interpretCommands tickState = do
-    s <- get
-    mcs <- lift . runMaybeT $ runStateT tickState s
-    case mcs of
-        Nothing -> throwError s
-        Just (cmds, s') -> do
-            put s'
-            m <-
-                lift $
-                runMaybeT $
-                 do
-                     -- NB cmds are processed before rendering, so that we can quit without rendering again
-                    interpretCommands cmds
-                    onFrame s'
-            -- on quit, throw the latest state in case downstream wants to use it.
-            case m of
-                Nothing -> throwError s'
-                Just _ -> pure ()
+runNotify
+    :: ( MFunctor t
+       , MonadState s (u m)
+       , MonadTrans u
+       , MonadTrans t
+       , Monad (t (u m))
+       , Monad m
+       )
+    => t (u m) cmds -> (s -> t m ()) -> (cmds -> t m b) -> t (u m) b
+runNotify tick renderFrame interpretCommands  = do
+    cmds <- tick
+    s <- lift get
+    hoist lift $ renderFrame s
+    hoist lift $ interpretCommands cmds
 
 -------------------------------------------------------------------------------
 -- | A more generic form of Elm start app.

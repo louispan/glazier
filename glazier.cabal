@@ -20,6 +20,7 @@ library
                       , Glazier.App
                       , Glazier.Core
   build-depends:        base >= 4.7 && < 5
+                      , alternators
                       , bifunctors
                       , lens
                       , mmorph
