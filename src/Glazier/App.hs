@@ -14,13 +14,14 @@ import Glazier.Core
 -- * interpretCommands is given the commands.
 -- An example of tickState function using Pipes.Concurrent is:
 -- @
---  import Pipes.Concurrent
+--  import qualified Pipes.Concurrent as PC.
+--  import qualified Control.Monad.Trans.State.Strict.Extras as SE
 --
 --  run = do
 --    (address, signal, seal) <- PC.spawn' PC.unbounded
 --    let mkCtl = (MaybeT . fmap guard) <$> PC.send address
 --        (xs, render) = G.startWidget (appWidget mkCtl) inbox
---        tickState = hoist (MaybeT . liftIO . atomically . PC.recv) xs
+--        tickState = SE.maybeState $ hoist (MaybeT . liftIO . atomically . PC.recv) xs
 -- @
 runNotify
     :: ( MFunctor t
