@@ -10,8 +10,9 @@ import Glazier.Core
 -- the updated state of the model.
 -- * tickState is tick procesing function that returns commands,
 --   rendering frame, and updated model state.
--- * onFrame is given the state to render.
--- * interpretCommands is given the commands.
+-- * onFrame is given the state to render, but is not a State Monad so it cannot modify the state
+-- * interpretCommands is given the commands, and is not a State Monad so interpreting the commands
+--   is not dependent on the state. This forces the interpreter to be more explicit.
 -- An example of tickState function using Pipes.Concurrent is:
 -- @
 --  import qualified Pipes.Concurrent as PC.
