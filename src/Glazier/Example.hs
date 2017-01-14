@@ -13,6 +13,7 @@ module Glazier.Example where
 import Control.Category
 import Control.Lens
 import Control.Monad.Reader
+import Control.Monad.RWS.Strict hiding ((<>))
 import Data.Foldable
 import Data.List
 import Data.Semigroup
@@ -65,16 +66,15 @@ instance AsSet (Set a) a where
 optionalExample ::
   ( Monoid d
   , Monoid c
-  -- , AsProxy a "Reset"
-  -- , AsTagged a "Map" (Maybe a2 -> Maybe a2)
-  -- , AsPrism a a1
   , Semigroup d
   , Semigroup c
   , AsSet a a2
   , AsReset a
   , AsAction a (Maybe a2 -> Maybe a2)
+  , Monoid w
+  , Monad m
   )
-  => Prism' a a1 -> Widget a1 a2 c d -> Widget a (Maybe a2) c d
+  => Prism' a a1 -> Widget a1 w a2 m c d -> Widget a w (Maybe a2) m c d
 optionalExample p w =
      (
      implant _Just -- original update will only work if model is Just
@@ -82,11 +82,9 @@ optionalExample p w =
      ) w
   <> statically mempty -- change mempty to specify a rendering function when Nothing
   <> dynamically
-    (  dispatch _Set      (mkNotifyRS' $ const . Just . getSet)
-    <> dispatch _Action   (mkNotifyRS' getAction)
-    -- <> dispatch (_Tagged (Proxy :: Proxy "Map")) (updateRS' unTagged)
-    <> dispatch _Reset    (mkNotifyRS' . const $ const Nothing)
-    -- <> dispatch (_Proxy (Proxy :: Proxy "Reset")) (updateRS' . const $ const Nothing)
+    (  dispatch _Set    (Notify . RWST $ \a _ -> pure (mempty, Just $ getSet a, mempty))
+    <> dispatch _Action (Notify . RWST $ \(Action f) s -> pure (mempty, f s, mempty))
+    <> dispatch _Reset  (Notify . RWST $ \_ _ -> pure (mempty, Nothing, mempty))
     )
 
 -- | Transforms a widget into an list widget.
@@ -105,27 +103,24 @@ listExample ::
   , Monoid c
   , Semigroup d
   , Semigroup c
-  -- , AsPrism b a
-  -- , AsProxy a "Tail"
   , AsTail a
-  -- , AsTagged a "Cons" s
   , AsConsAction a s
-  -- , AsTagged a "Map" ([s] -> [s])
   , AsAction a ([s] -> [s])
+  , Monoid w
+  , Monad m
   )
-  => Prism' b a -> Widget a s c d -> Widget b [s] c d
+  => Prism' b a -> Widget a w s m c d -> Widget b w [s] m c d
 listExample p (Widget u (Depict d)) =
      -- Create a list rendering function by
      -- interspercing the separator with the View from the original widget.
-     statically (Depict $ \ss -> fold $ intersperse separator $ fmap d ss)
+     statically (Depict . ReaderT $ \ss -> do
+                        ss' <- traverse (runReaderT d) ss
+                        pure (fold $ intersperse separator ss'))
   <> dynamically
     (  implant (ix 0) u -- original update will only work on the head of list
-    -- <> dispatch (_Proxy (Proxy :: Proxy "Tail")) (updateRS' . const $ tail)
-    <> dispatch _Tail   (mkNotifyRS' . const $ tail)
-    -- <> dispatch (_Tagged (Proxy :: Proxy "Cons")) (updateRS' $ (:) . unTagged)
-    <> dispatch _ConsAction (mkNotifyRS' $ (:) . getConsAction)
-    -- <> dispatch (_Tagged (Proxy :: Proxy "Map")) (updateRS' unTagged)
-    <> dispatch _Action (mkNotifyRS' getAction)
+    <> dispatch _Tail       (Notify . RWST $ \_ s -> pure (mempty, tail s , mempty))
+    <> dispatch _ConsAction (Notify . RWST $ \(ConsAction a) s -> pure (mempty, a : s, mempty))
+    <> dispatch _Action     (Notify . RWST $ \(Action f) s -> pure (mempty, f s, mempty))
     )
   & dispatch p -- make original action part of a smaller action
  where separator = mempty -- change mempty to specify a rendering function
@@ -138,24 +133,25 @@ listExample p (Widget u (Depict d)) =
 -- * A tuple of (key, original action)
 -- The original action is now a tuple with an additional key, which will act on the widget if the key exists in the map.
 indexedExample ::
-  ( Functor t
-  , Foldable t
-  , Monoid d
+  ( Monoid d
   , Monoid c
   , Field2 b b a a
   , Field1 b b (Index (t s)) (Index (t s))
   , Ixed (t s)
   , Semigroup d
   , Semigroup c
-  -- , AsPrism b a
-  -- , AsTagged b "Map" (t s -> t s)
   , AsAction b (t s -> t s)
   , IxValue (t s) ~ s
+  , Monoid w
+  , Monad m
+  , Traversable t
   )
-  => Widget a s c d -> Widget b (t s) c d
+  => Widget a w s m c d -> Widget b w (t s) m c d
 indexedExample (Widget (Notify u) (Depict d)) =
      -- Create a rendering function by folding the original view function
-    statically (Depict $ \ss -> fold (fmap d ss))
+     statically (Depict . ReaderT $ \ss -> do
+                        ss' <- traverse (runReaderT d) ss
+                        pure (fold ss'))
   <>
     dynamically
     (
@@ -165,11 +161,10 @@ indexedExample (Widget (Notify u) (Depict d)) =
        (Notify $ do
          x <- ask
          let k = x ^. _1
-             a = x ^. _2
-         -- run u but for a state implantded by ix k
-         lift $ zoom (ix k) (runReaderT u a)
+             -- a = x ^. _2
+         -- run u but for a state implanted by ix k
+         zoom (ix k) (magnify _2 u)
        )
     <>
-      -- dispatch (_Tagged (Proxy :: Proxy "Map")) (updateRS' unTagged)
-      dispatch _Action (mkNotifyRS' getAction)
+      dispatch _Action     (Notify . RWST $ \(Action f) s -> pure (mempty, f s, mempty))
     )

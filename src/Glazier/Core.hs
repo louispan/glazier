@@ -4,6 +4,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -36,13 +37,10 @@
 -- * 'implant' is used to modify the model type.
 module Glazier.Core
     ( Depict(..)
-    , depict
     , Notify(..)
-    , notify
-    , mkNotifyR
-    , mkNotifyRS
-    , mkNotifyRS'
     , Widget(..)
+    , HasDepict(..)
+    , HasNotify(..)
     , statically
     , dynamically
     , Implanted
@@ -55,7 +53,7 @@ import Control.Category
 import Control.Lens
 import Control.Lens.Internal.Zoom
 import Control.Monad.Reader
-import Control.Monad.State.Strict
+import Control.Monad.RWS.Strict hiding ((<>))
 import Data.Biapplicative
 import Data.Functor.Apply
 import Data.Maybe
@@ -69,14 +67,22 @@ import Prelude hiding (id, (.))
 -- where @Signal.Address action@ is the Pipes.Concurrent.Output that is sent
 -- actions (eg. when html button is clicked).
 -- This address argument is not required in the general case, and is only required for specific widgets on an as needed basis.
--- Therefore, using the fundamental type of @view :: model -> html@, this is
--- isomorphic to @(->) s @ Reader, whose instances of Functor, Applicative
--- and Monad can be used to change the render type.
+-- Therefore, using the fundamental type of @view :: model -> html@
+-- This is be ehanced with monadic effects with ReaderT.
 -- This is named Depict instead of View to avoid confusion with view from Control.Lens
-newtype Depict s d = Depict { getDepict :: s -> d }
-  deriving (MonadReader s, Monad, Applicative, Functor, Semigroup, Monoid)
+newtype Depict s m d = Depict { getDepict :: ReaderT s m d }
+  deriving (MonadReader s, Monad, Applicative, Functor)
 
 makeWrapped ''Depict
+
+instance (Applicative m, Semigroup c) => Semigroup (Depict s m c) where
+    (Depict f) <> (Depict g) = Depict $ ReaderT $ \a ->
+        (<>) <$> runReaderT f a <*> runReaderT g a
+
+instance (Applicative m, Monoid c) => Monoid (Depict s m c) where
+    mempty = Depict $ ReaderT $ const $ pure mempty
+    (Depict f) `mappend` (Depict g) = Depict $ ReaderT $ \a ->
+        mappend <$> runReaderT f a <*> runReaderT g a
 
 -------------------------------------------------------------------------------
 
@@ -85,63 +91,47 @@ makeWrapped ''Depict
 -- ie, given an action "a", and a current state "s", return the new state "s"
 -- and any commands "c" that need to be interpreted externally (eg. download file).
 -- This is named Notify instead of Update to avoid confusion with update from Data.Map
-newtype Notify a s c = Notify { getNotify :: ReaderT a (State s) c }
+-- This is also further enhanced with monadic and Writer effect, so we can just use RWST to avoid
+-- writing new code.
+newtype Notify a w s m c = Notify { getNotify :: RWST a w s m c }
   deriving (MonadState s, MonadReader a, Monad, Applicative, Functor)
 
 makeWrapped ''Notify
 
-instance Semigroup c => Semigroup (Notify a s c) where
-   (Notify f) <> (Notify g) = Notify $ do
-    a <- ask
-    lift $ (<>) <$> runReaderT f a <*> runReaderT g a
+instance (Monad m, Monoid w, Semigroup c) => Semigroup (Notify a w s m c) where
+   (Notify f) <> (Notify g) = Notify $ (<>) <$> f <*> g
 
-instance Monoid c => Monoid (Notify a s c) where
-  mempty = Notify $ lift $ state $ (,) mempty
-  (Notify f) `mappend` (Notify g) = Notify $ do
-    a <- ask
-    lift $ mappend <$> runReaderT f a <*> runReaderT g a
-
--- | Useful for converting functions eventually to 'Notify'.
-mkNotifyR :: (a -> State s c) -> Notify a s c
-mkNotifyR = Notify . ReaderT
-
--- | Useful for converting functions eventually to 'Notify'.
-mkNotifyRS :: (a -> s -> (c, s)) -> Notify a s c
-mkNotifyRS = Notify . ReaderT . (state .)
-
--- | Useful for converting functions eventually to 'Notify'.
-mkNotifyRS' :: Monoid c => (a -> s -> s) -> Notify a s c
-mkNotifyRS' = Notify . ReaderT . (state' .)
- where
-   state' f = state $ (,) mempty <$> f -- opposite of execState
+instance (Monad m, Monoid w, Monoid c) => Monoid (Notify a w s m c) where
+  mempty = Notify $ RWST $ \_ s -> pure (mempty, s, mempty)
+  (Notify f) `mappend` (Notify g) = Notify $ mappend <$> f <*> g
 
 -------------------------------------------------------------------------------
 
 -- | A widget is basically a tuple with Notify and Depict.
-data Widget a s c d = Widget
-  { widgetNotify :: Notify a s c -- a -> s -> (s, c)
-  , widgetDepict :: Depict s d -- s -> d
+data Widget a w s m c d = Widget
+  { widgetNotify :: Notify a w s m c -- a -> s -> (s, c)
+  , widgetDepict :: Depict s m d -- s -> d
   }
 
 makeFields ''Widget
 
-instance (Semigroup c, Semigroup d) => Semigroup (Widget a s c d) where
+instance (Monad m, Monoid w, Semigroup c, Semigroup d) => Semigroup (Widget a w s m c d) where
   w1 <> w2 = Widget
     (widgetNotify w1 <> widgetNotify w2)
     (widgetDepict w1 <> widgetDepict w2)
 
-instance (Monoid c, Monoid d) => Monoid (Widget a s c d) where
+instance (Monad m, Monoid w, Monoid c, Monoid d) => Monoid (Widget a w s m c d) where
   mempty = Widget mempty mempty
   mappend w1 w2 = Widget
     (widgetNotify w1 `mappend` widgetNotify w2)
     (widgetDepict w1 `mappend` widgetDepict w2)
 
-instance Bifunctor (Widget a s) where
+instance Functor m => Bifunctor (Widget a w s m) where
   bimap f g w = Widget
     (f <$> widgetNotify w)
     (g <$> widgetDepict w)
 
-instance Biapplicative (Widget a s) where
+instance (Monad m, Monoid w) => Biapplicative (Widget a w s m) where
   bipure a b = Widget
     (pure a)
     (pure b)
@@ -149,23 +139,23 @@ instance Biapplicative (Widget a s) where
     (widgetNotify f <*> widgetNotify a)
     (widgetDepict f <*> widgetDepict a)
 
-statically :: Monoid c => Depict s d -> Widget a s c d
+statically :: (Monad m, Monoid w, Monoid c) => Depict s m d -> Widget a w s m c d
 statically = Widget mempty
 
-dynamically :: Monoid d => Notify a s c -> Widget a s c d
+dynamically :: (Monad m, Monoid d) => Notify a w s m c -> Widget a w s m c d
 dynamically v = Widget v mempty
 
--------------------------------------------------------------------------------
+-- -------------------------------------------------------------------------------
 
 -- | magnify can be used to modify the action inside an Notify
-type instance Magnified (Notify a s) = Effect (State s)
-instance Magnify (Notify a s) (Notify b s) a b where
+type instance Magnified (Notify a w s m) = Magnified (RWST a w s m)
+instance (Monad m, Monoid w) => Magnify (Notify a w s m) (Notify b w s m) a b where
   magnify l = Notify . magnify l . getNotify
   {-# INLINE magnify #-}
 
 -- | zoom can be used to modify the state inside an Notify
-type instance Zoomed (Notify a s) = Zoomed (State s)
-instance Zoom (Notify a s) (Notify a t) s t where
+type instance Zoomed (Notify a w s m) = Zoomed (RWST a w s m)
+instance (Monad m, Monoid w) => Zoom (Notify a w s m) (Notify a w t m) s t where
   zoom l = Notify . zoom l . getNotify
   {-# INLINE zoom #-}
 
@@ -177,16 +167,16 @@ type family Implanted m :: * -> *
 class Implant m n s t | m -> s, n -> t, m t -> n, n s -> m where
   implant :: LensLike' (Implanted m) t s -> m -> n
 
-type instance Implanted (Depict s d) = Const d
-instance Implant (Depict s d) (Depict t d) s t where
+type instance Implanted (Depict s m d) = Effect m d
+instance Monad m => Implant (Depict s m d) (Depict t m d) s t where
   implant l = Depict . magnify l . getDepict
 
-type instance Implanted (Notify a s c) = Zoomed (Notify a s) c
-instance Implant (Notify a s c) (Notify a t c) s t where
+type instance Implanted (Notify a w s m c) = Zoomed (Notify a w s m) c
+instance (Monad m, Monoid w) => Implant (Notify a w s m c) (Notify a w t m c) s t where
   implant = zoom
 
-type instance Implanted (Widget a s c d) = PairMaybeFunctor (Implanted (Notify a s c)) (Implanted (Depict s d))
-instance Implant (Widget a s c d) (Widget a t c d) s t where
+type instance Implanted (Widget a w s m c d) = PairMaybeFunctor (Implanted (Notify a w s m c)) (Implanted (Depict s m d))
+instance (Monad m, Monoid w) => Implant (Widget a w s m c d) (Widget a w t m c d) s t where
   implant l w = Widget
     (implant (fstLensLike l) $ widgetNotify w)
     (implant (sndLensLike l) $ widgetDepict w)
@@ -197,15 +187,15 @@ instance Implant (Widget a s c d) (Widget a t c d) s t where
 class Dispatch m n a b | m -> a, n -> b, m b -> n, n a -> m where
   dispatch :: Prism' b a -> m -> n
 
-instance Monoid c => Dispatch (Notify a s c) (Notify b s c) a b where
+instance (Monad m, Monoid w, Monoid c) => Dispatch (Notify a w s m c) (Notify b w s m c) a b where
   dispatch = magnify
 
-instance Monoid c => Dispatch (Widget a s c v) (Widget b s c v) a b where
+instance (Monad m, Monoid w, Monoid c) => Dispatch (Widget a w s m c v) (Widget b w s m c v) a b where
   dispatch p w = Widget
     (dispatch p $ widgetNotify w)
     (widgetDepict w)
 
--------------------------------------------------------------------------------
+-- -------------------------------------------------------------------------------
 
 -- | This can be used to hold two LensLike functors.
 -- The inner LensLike functor can be extracted from a @LensLike (PairMaybeFunctor f g) s t a b@
