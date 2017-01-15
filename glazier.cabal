@@ -17,7 +17,6 @@ library
   hs-source-dirs:      src
   exposed-modules:      Glazier
                       , Glazier.Example
-                      , Glazier.Core
   build-depends:        base >= 4.7 && < 5
                       , bifunctors
                       , lens
