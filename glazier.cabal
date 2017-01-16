@@ -1,5 +1,5 @@
 name:                glazier
-version:             0.3.0.0
+version:             0.4.0.0
 synopsis:            Functional version of (Elm Update/View & startApp architecture) enabling composable widgets, and a FRP-like framework
 description:         Please see README.md
 homepage:            https://github.com/louispan/glazier#readme
@@ -17,13 +17,17 @@ library
   hs-source-dirs:      src
   exposed-modules:      Glazier
                       , Glazier.Example
+                      , Glazier.Strict
+                      , Glazier.Lazy
   build-depends:        base >= 4.7 && < 5
                       , bifunctors
                       , lens
-                      , mmorph
+                      -- , mmorph
                       , mtl
                       , semigroupoids
                       , transformers
+                      , writer-cps-mtl
+                      , profunctors
   ghc-options:         -O2 -Wall
   default-language:    Haskell2010
 

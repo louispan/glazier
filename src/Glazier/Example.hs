@@ -13,15 +13,15 @@ module Glazier.Example where
 import Control.Category
 import Control.Lens
 import Control.Monad.Reader
-import Control.Monad.RWS.Strict hiding ((<>))
+import Control.Monad.RWS.CPS hiding ((<>))
+-- import Control.Monad.RWS.Lazy
 import Data.Foldable
 import Data.List
 import Data.Semigroup
 import Glazier
+-- import Glazier.Lazy
+import Glazier.Strict
 import Prelude hiding (id, (.))
--- import Control.Lens.Classy
--- import Data.Proxy.Lens.Classy
--- import Data.Tagged.Lens.Classy
 
 newtype Action a = Action { getAction :: a }
 class AsAction s a | s -> a where
@@ -82,9 +82,9 @@ optionalExample p w =
      ) w
   <> statically mempty -- change mempty to specify a rendering function when Nothing
   <> dynamically
-    (  dispatch _Set    (Notify . RWST $ \a _ -> pure (mempty, Just $ getSet a, mempty))
-    <> dispatch _Action (Notify . RWST $ \(Action f) s -> pure (mempty, f s, mempty))
-    <> dispatch _Reset  (Notify . RWST $ \_ _ -> pure (mempty, Nothing, mempty))
+    (  dispatch _Set    (toGadget $ \a _ -> pure (mempty, Just $ getSet a, mempty))
+    <> dispatch _Action (toGadget $ \(Action f) s -> pure (mempty, f s, mempty))
+    <> dispatch _Reset  (toGadget $ \_ _ -> pure (mempty, Nothing, mempty))
     )
 
 -- | Transforms a widget into an list widget.
@@ -110,17 +110,17 @@ listExample ::
   , Monad m
   )
   => Prism' b a -> Widget a w s m c d -> Widget b w [s] m c d
-listExample p (Widget u (Depict d)) =
+listExample p (Widget u (Window d)) =
      -- Create a list rendering function by
      -- interspercing the separator with the View from the original widget.
-     statically (Depict . ReaderT $ \ss -> do
+     statically (Window . ReaderT $ \ss -> do
                         ss' <- traverse (runReaderT d) ss
                         pure (fold $ intersperse separator ss'))
   <> dynamically
     (  implant (ix 0) u -- original update will only work on the head of list
-    <> dispatch _Tail       (Notify . RWST $ \_ s -> pure (mempty, tail s , mempty))
-    <> dispatch _ConsAction (Notify . RWST $ \(ConsAction a) s -> pure (mempty, a : s, mempty))
-    <> dispatch _Action     (Notify . RWST $ \(Action f) s -> pure (mempty, f s, mempty))
+    <> dispatch _Tail       (toGadget $ \_ s -> pure (mempty, tail s , mempty))
+    <> dispatch _ConsAction (toGadget $ \(ConsAction a) s -> pure (mempty, a : s, mempty))
+    <> dispatch _Action     (toGadget $ \(Action f) s -> pure (mempty, f s, mempty))
     )
   & dispatch p -- make original action part of a smaller action
  where separator = mempty -- change mempty to specify a rendering function
@@ -147,9 +147,9 @@ indexedExample ::
   , Traversable t
   )
   => Widget a w s m c d -> Widget b w (t s) m c d
-indexedExample (Widget (Notify u) (Depict d)) =
+indexedExample (Widget g (Window d)) =
      -- Create a rendering function by folding the original view function
-     statically (Depict . ReaderT $ \ss -> do
+     statically (Window . ReaderT $ \ss -> do
                         ss' <- traverse (runReaderT d) ss
                         pure (fold ss'))
   <>
@@ -158,13 +158,13 @@ indexedExample (Widget (Notify u) (Depict d)) =
        -- This effectively dispatches the Update
        -- ie the action type has changed
        -- so a @dispatch prism@ is not required
-       (Notify $ do
+       (do
          x <- ask
          let k = x ^. _1
              -- a = x ^. _2
          -- run u but for a state implanted by ix k
-         zoom (ix k) (magnify _2 u)
+         zoom (ix k) (magnify _2 g)
        )
     <>
-      dispatch _Action     (Notify . RWST $ \(Action f) s -> pure (mempty, f s, mempty))
+      dispatch _Action     (toGadget $ \(Action f) s -> pure (mempty, f s, mempty))
     )
