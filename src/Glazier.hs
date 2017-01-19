@@ -36,6 +36,9 @@
 -- * 'implant' is used to modify the model type.
 module Glazier
     ( Window(..)
+    , liftWindow
+    , hoistWindow
+    , underWindow
     , Implanted
     , Implant(..)
     , Dispatched
@@ -43,11 +46,17 @@ module Glazier
     ) where
 
 import Control.Applicative
+import Control.Arrow
+import qualified Control.Category as C
 import Control.Lens
 import qualified Control.Lens.Internal.Zoom as Z
+import qualified Control.Monad.Fail as Fail
 import Control.Monad.Reader
 import Data.Semigroup
-import Prelude hiding (id, (.))
+import Control.Monad.Fix (MonadFix)
+import Control.Monad.Zip (MonadZip)
+import Control.Monad.Morph
+import Data.Profunctor
 
 -------------------------------------------------------------------------------
 
@@ -59,19 +68,68 @@ import Prelude hiding (id, (.))
 -- Therefore, using the fundamental type of @view :: model -> html@
 -- This is be ehanced with monadic effects with ReaderT.
 -- This is named Window instead of View to avoid confusion with view from Control.Lens
-newtype Window s m v = Window { runWindow :: ReaderT s m v }
-  deriving (MonadReader s, Monad, Applicative, Functor)
+newtype Window m s v = Window
+    { runWindow :: ReaderT s m v
+    } deriving ( MonadReader s
+               , Monad
+               , Applicative
+               , Functor
+               , Fail.MonadFail
+               , Alternative
+               , MonadPlus
+               , MonadFix
+               , MonadIO
+               , MonadZip
+               )
 
 makeWrapped ''Window
 
-instance (Applicative m, Semigroup v) => Semigroup (Window s m v) where
+liftWindow :: (MonadTrans t, Monad m) => Window m s v -> Window (t m) s v
+liftWindow (Window (ReaderT f)) = Window $ ReaderT $ \a -> lift (f a)
+
+hoistWindow :: (Monad m) => (forall a. m a -> n a) -> Window m s v -> Window n s v
+hoistWindow f (Window m) = Window $ hoist f m
+
+underWindow :: ((s -> m v) -> (s' -> m' v')) -> Window m s v -> Window m' s' v'
+underWindow f (Window (ReaderT m)) = Window . ReaderT $ f m
+
+instance (Applicative m, Semigroup v) => Semigroup (Window m s v) where
     (Window f) <> (Window g) = Window $ ReaderT $ \a ->
         (<>) <$> runReaderT f a <*> runReaderT g a
 
-instance (Applicative m, Monoid v) => Monoid (Window s m v) where
+instance (Applicative m, Monoid v) => Monoid (Window m s v) where
     mempty = Window $ ReaderT $ const $ pure mempty
     (Window f) `mappend` (Window g) = Window $ ReaderT $ \a ->
         mappend <$> runReaderT f a <*> runReaderT g a
+
+instance Monad m => Profunctor (Window m) where
+    dimap f g = underWindow (runKleisli . dimap f g . Kleisli)
+
+instance Monad m => Strong (Window m) where
+    first' = underWindow (runKleisli . first' . Kleisli)
+
+instance Monad m => C.Category (Window m) where
+    id = Window . ReaderT $ runKleisli C.id
+    Window (ReaderT k) . Window (ReaderT l) = Window . ReaderT . runKleisli $ Kleisli k C.. Kleisli l
+
+instance Monad m => Arrow (Window m) where
+    arr f = Window $ ReaderT $ runKleisli $ arr f
+    first = underWindow (runKleisli . first . Kleisli)
+
+instance Monad m => Choice (Window m) where
+    left' = underWindow (runKleisli . left' . Kleisli)
+
+instance Monad m => ArrowChoice (Window m) where
+    left = underWindow (runKleisli . left . Kleisli)
+
+instance Monad m => ArrowApply (Window m) where
+    app = Window . ReaderT $ \(Window (ReaderT bc), b) -> bc b
+
+instance MonadPlus m => ArrowZero (Window m) where
+    zeroArrow = Window mzero
+
+instance MonadPlus m => ArrowPlus (Window m) where
+    Window a <+> Window b = Window (a `mplus` b)
 
 -------------------------------------------------------------------------------
 
@@ -81,8 +139,8 @@ type family Implanted m :: * -> *
 class Implant m n s t | m -> s, n -> t, m t -> n, n s -> m where
   implant :: LensLike' (Implanted m) t s -> m -> n
 
-type instance Implanted (Window s m v) = Z.Effect m v
-instance Monad m => Implant (Window s m v) (Window t m v) s t where
+type instance Implanted (Window m s v) = Z.Effect m v
+instance Monad m => Implant (Window m s v) (Window m t v) s t where
   implant l (Window m) = Window $ magnify l m
 
 -------------------------------------------------------------------------------
