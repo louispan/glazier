@@ -1,49 +1,48 @@
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Glazier.Strict where
-    -- ( Gadget(..)
-    -- , Widget(..)
-    -- , HasWindow(..)
-    -- , HasGadget(..)
-    -- , statically
-    -- , dynamically
-    -- ) where
+module Glazier.Strict
+    ( Gadget(..)
+    , _GadgetT
+    , _GadgetT'
+    , hoistGadget
+    , Widget(..)
+    , hoistWidget
+    , HasWindow(..)
+    , HasGadget(..)
+    , statically
+    , dynamically
+    ) where
 
-import Control.Arrow
 import Control.Applicative
+import Control.Arrow
+import qualified Control.Category as C
 import Control.Lens
+import qualified Control.Monad.Fail as Fail
+import Control.Monad.Fix (MonadFix)
+import Control.Monad.Morph
 import Control.Monad.Reader
-import Control.Monad.RWS.CPS hiding ((<>))
-import Control.Monad.Trans.RWS.CPS.Internal (RWST(..))
-import Control.Monad.Trans.RWS.CPS.Lens ()
+import Control.Monad.State.Strict
 import Data.Functor.Apply
 import Data.Maybe
+import Data.Profunctor
 import Data.Semigroup
 import Glazier
-import qualified Control.Monad.Fail as Fail
-import Control.Monad.Morph
-import qualified Control.Category as C
-import Control.Monad.Fix (MonadFix)
-import Data.Profunctor
 
 -- | The Elm update function is @a -> s -> (s, c)@
 -- This is isomorphic to @ReaderT a (State s) c@
 -- ie, given an action "a", and a current state "s", return the new state "s"
 -- and any commands "c" that need to be interpreted externally (eg. download file).
 -- This is named Gadget instead of Update to avoid confusion with update from Data.Map
--- This is also further enhanced with monadic and Writer effect, so we can just use RWST to avoid
--- writing new code.
-newtype Gadget w s m a c = Gadget
-    { runGadget :: RWST a w s m c
+newtype Gadget s m a c = Gadget
+    { runGadget :: ReaderT a (StateT s m) c
     } deriving ( MonadState s
-               , MonadWriter w
                , MonadReader a
                , Monad
                , Applicative
@@ -57,105 +56,117 @@ newtype Gadget w s m a c = Gadget
 
 makeWrapped ''Gadget
 
-liftGadget :: (MonadTrans t, Monad m) => Gadget w s m a c -> Gadget w s (t m) a c
-liftGadget (Gadget (RWST f)) = Gadget $ RWST $ \a s w -> lift (f a s w)
+-- | NB lift can be simulated:
+-- liftGadget :: (MonadTrans t, Monad m) => Gadget s m a c -> Gadget s (t m) a c
+-- liftGadget = _Wrapping Gadget %~ hoist (hoist lift)
+hoistGadget :: (Monad m) => (forall b. m b -> n b) -> Gadget s m a c -> Gadget s n a c
+hoistGadget g = _Wrapping Gadget %~ hoist (hoist g)
 
-hoistGadget :: (Monad m) => (forall x. m x -> n x) -> Gadget w s m a c -> Gadget w s n a c
-hoistGadget f (Gadget m) = Gadget $ hoist f m
+-- | This in conjuction with Wrapped instance gives the following functions:
+-- underGadget :: (ReaderT a (StateT s m) c -> ReaderT a' (StateT s' m') c') -> Gadget s m a c -> Gadget s' m' a' c'
+-- underGadget f = _Wrapping Gadget %~ f
+--
+-- overGadget :: (Gadget s m a c -> Gadget s' m' a' c') -> ReaderT a (StateT s m) c -> ReaderT a' (StateT s' m') c'
+-- overGadget f = _Unwrapping Gadget %~ f
+--
+-- belowGadget :: (a -> s -> m (c, s)) (a' -> s' -> m' (c', s')) -> Gadget s m a c -> Gadget s' m' a' c'
+-- belowGadget f = _GadgetT %~ f
+--
+-- aboveGadget :: (Gadget s m a c -> Gadget s' m' a' c') -> (a -> s -> m (c, s)) (a' -> s' -> m' (c', s'))
+-- aboveGadget f = from _GadgetT %~ f
+_GadgetT :: Iso (Gadget s m a c) (Gadget s' m' a' c') (a -> s -> m (c, s)) (a' -> s' -> m' (c', s'))
+_GadgetT = _Wrapping Gadget . iso runReaderT ReaderT . iso (runStateT .) (StateT .)
 
-underGadget :: (Functor m', Monoid w, Monoid w') => ((a -> s -> m (c, s, w)) -> (a' -> s' -> m' (c', s', w'))) -> Gadget w s m a c -> Gadget w' s' m' a' c'
-underGadget f (Gadget (RWST m)) = Gadget $ rwsT $ f (\a s -> m a s mempty)
+-- | Non polymorphic version of _GadgetT
+_GadgetT' :: Iso' (Gadget s m a c) (a -> s -> m (c, s))
+_GadgetT' = _GadgetT
 
-instance (Monad m, Semigroup c) => Semigroup (Gadget w s m a c) where
+instance (Monad m, Semigroup c) => Semigroup (Gadget s m a c) where
     (Gadget f) <> (Gadget g) = Gadget $ (<>) <$> f <*> g
 
-instance (Monad m, Monoid c) => Monoid (Gadget w s m a c) where
+instance (Monad m, Monoid c) => Monoid (Gadget s m a c) where
     mempty = Gadget $ pure mempty
     (Gadget f) `mappend` (Gadget g) = Gadget $ mappend <$> f <*> g
 
--- FIXME: Move to a new package
-instance MFunctor (RWST r w s) where
-    hoist nat (RWST m) = RWST (\r s w -> nat (m r s w))
+instance Monad m => Profunctor (Gadget s m) where
+    dimap f g (Gadget (ReaderT m)) = Gadget $ ReaderT $ \a -> StateT $ \s -> undefined
+        (first g) <$> runStateT (m (f a)) s
 
-instance Monad m => Profunctor (Gadget w s m) where
-    dimap f g (Gadget (RWST m)) = Gadget $ RWST $ \a s w ->
-        (\(c, s', w') -> (g c, s', w')) <$> m (f a) s w
+instance Monad m => Strong (Gadget s m) where
+    first' (Gadget (ReaderT bc)) = Gadget $ ReaderT $ \(b, d) -> StateT $ \s ->
+        (\(c, s') -> ((c, d), s')) <$> runStateT (bc b) s
 
-instance Monad m => Strong (Gadget w s m) where
-    first' (Gadget (RWST bc)) = Gadget $ RWST $ \(b, d) s w ->
-        (\(c, s', w') -> ((c, d), s', w')) <$> bc b s w
+instance Monad m => C.Category (Gadget s m) where
+    id = Gadget $ ReaderT $ \a -> StateT $ \s -> pure (a, s)
+    Gadget (ReaderT bc) . Gadget (ReaderT ab) = Gadget $ ReaderT $ \a -> StateT $ \s -> do
+        (b, s') <- runStateT (ab a) s
+        runStateT (bc b) s'
 
-instance Monad m => C.Category (Gadget w s m) where
-    id = Gadget $ RWST $ \a s w -> pure (a, s, w)
-    Gadget (RWST bc) . Gadget (RWST ab) = Gadget $ RWST $ \a s w -> do
-        (b, s', w') <- ab a s w
-        bc b s' w'
-
-instance Monad m => Arrow (Gadget w s m) where
+instance Monad m => Arrow (Gadget s m) where
     arr f = dimap f id C.id
     first = first'
 
-instance Monad m => Choice (Gadget w s m) where
-    left' (Gadget (RWST bc)) = Gadget $ RWST $ \db s w -> case db of
+instance Monad m => Choice (Gadget s m) where
+    left' (Gadget (ReaderT bc)) = Gadget $ ReaderT $ \db -> StateT $ \s -> case db of
         Left b -> do
-            (c, s', w') <- bc b s w
-            pure (Left c, s', w')
-        Right d -> pure (Right d, s, w)
+            (c, s') <- runStateT (bc b) s
+            pure (Left c, s')
+        Right d -> pure (Right d, s)
 
-instance Monad m => ArrowChoice (Gadget w s m) where
+instance Monad m => ArrowChoice (Gadget s m) where
     left = left'
 
-instance Monad m => ArrowApply (Gadget w s m) where
-    app = Gadget $ RWST $ \(Gadget (RWST bc), b) s w -> bc b s w
+instance Monad m => ArrowApply (Gadget s m) where
+    app = Gadget $ ReaderT $ \(Gadget (ReaderT bc), b) -> StateT $ \s -> runStateT (bc b) s
 
-instance MonadPlus m => ArrowZero (Gadget w s m) where
+instance MonadPlus m => ArrowZero (Gadget s m) where
     zeroArrow = Gadget mzero
 
-instance MonadPlus m => ArrowPlus (Gadget w s m) where
+instance MonadPlus m => ArrowPlus (Gadget s m) where
     Gadget a <+> Gadget b = Gadget (a `mplus` b)
 
 -- | zoom can be used to modify the state inside an Gadget
-type instance Zoomed (Gadget w s m a) = Zoomed (RWST a w s m)
-instance Monad m => Zoom (Gadget w s m a) (Gadget w t m a) s t where
+type instance Zoomed (Gadget s m a) = Zoomed (StateT s m)
+instance Monad m => Zoom (Gadget s m a) (Gadget t m a) s t where
   zoom l = Gadget . zoom l . runGadget
   {-# INLINE zoom #-}
 
 -- | magnify can be used to modify the action inside an Gadget
-type instance Magnified (Gadget w s m a) = Magnified (RWST a w s m)
-instance Monad m => Magnify (Gadget w s m a) (Gadget w s m b) a b where
+type instance Magnified (Gadget s m a) = Magnified (ReaderT a (StateT s m))
+instance Monad m => Magnify (Gadget s m a) (Gadget s m b) a b where
   magnify l = Gadget . magnify l . runGadget
   {-# INLINE magnify #-}
 
-type instance Implanted (Gadget w s m a c) = Zoomed (Gadget w s m a) c
-instance Monad m => Implant (Gadget w s m a c) (Gadget w t m a c) s t where
+type instance Implanted (Gadget s m a c) = Zoomed (Gadget s m a) c
+instance Monad m => Implant (Gadget s m a c) (Gadget t m a c) s t where
     implant = zoom
 
-type instance Dispatched (Gadget w s m a c) = Magnified (Gadget w s m a) c
-instance Monad m => Dispatch (Gadget w s m a c) (Gadget w s m b c) a b where
+type instance Dispatched (Gadget s m a c) = Magnified (Gadget s m a) c
+instance Monad m => Dispatch (Gadget s m a c) (Gadget s m b c) a b where
     dispatch = magnify
 
--------------------------------------------------------------------------------
+-----------------------------------------------------------------------------
 
 -- | A widget is basically a tuple with Gadget and Window.
-data Widget w s v m a c = Widget
+data Widget s v m a c = Widget
   { widgetWindow :: Window m s v
-  , widgetGadget :: Gadget w s m a c
+  , widgetGadget :: Gadget s m a c
   }
 
 makeFields ''Widget
 
-liftWidget :: (MonadTrans t, Monad m) => Widget w s v m a c -> Widget w s v (t m) a c
-liftWidget (Widget w g) = Widget (liftWindow w) (liftGadget g)
-
-hoistWidget :: (Monad m) => (forall x. m x -> n x) -> Widget w s v m a c -> Widget w s v n a c
+-- | NB lift can be simulated:
+-- liftWidget :: (MonadTrans t, Monad m) => Widget s v m a c -> Widget s v (t m) a c
+-- liftWidget = hoistWidget lift
+hoistWidget :: (Monad m) => (forall x. m x -> n x) -> Widget s v m a c -> Widget s v n a c
 hoistWidget f (Widget w g) = Widget (hoistWindow f w) (hoistGadget f g)
 
-instance (Monad m, Semigroup c, Semigroup v) => Semigroup (Widget w s v m a c) where
+instance (Monad m, Semigroup c, Semigroup v) => Semigroup (Widget s v m a c) where
     w1 <> w2 = Widget
       (widgetWindow w1 <> widgetWindow w2)
       (widgetGadget w1 <> widgetGadget w2)
 
-instance (Monad m, Monoid c, Monoid v) => Monoid (Widget w s v m a c) where
+instance (Monad m, Monoid c, Monoid v) => Monoid (Widget s v m a c) where
     mempty = Widget mempty mempty
     mappend w1 w2 = Widget
         (widgetWindow w1 `mappend` widgetWindow w2)
@@ -166,7 +177,7 @@ instance (Monad m, Monoid c, Monoid v) => Monoid (Widget w s v m a c) where
 -- (Widget w g) = Widget w (id <$> g) =  Widget w g
 -- 2: fmap (f . g) = fmap f . fmap g
 -- (Widget w gad) = Widget w ((f . g) <$> gad) = Widget w ((fmap f . fmap g) gad)
-instance Functor m => Functor (Widget w s v m a) where
+instance Functor m => Functor (Widget s v m a) where
     fmap f (Widget w g) = Widget
         w
         (f <$> g)
@@ -187,17 +198,17 @@ instance Functor m => Functor (Widget w s v m a) where
 --     = Widget (uw <> mempty) (ug <*> pure y)
 --     = Widget (mempty <> uw) (pure ($ y) <*> ug)
 --     = Widget mempty (pure $y) <*> Widget uw ug
-instance (Semigroup v, Monad m, Monoid v) => Applicative (Widget w s v m a) where
+instance (Semigroup v, Monad m, Monoid v) => Applicative (Widget s v m a) where
     pure c = Widget mempty (pure c)
     (Widget w1 fg) <*> (Widget w2 g) = Widget (w1 <> w2) (fg <*> g)
 
-instance Monad m => Profunctor (Widget w s v m) where
+instance Monad m => Profunctor (Widget s v m) where
     dimap f g (Widget w m) = Widget w (dimap f g m)
 
-instance Monad m => Strong (Widget w s v m) where
+instance Monad m => Strong (Widget s v m) where
     first' (Widget w g) = Widget w (first' g)
 
-instance (Monad m, Monoid v) => C.Category (Widget w s v m) where
+instance (Monad m, Monoid v) => C.Category (Widget s v m) where
     id = Widget mempty C.id
     Widget wbc gbc . Widget wab gab = Widget
         (wab `mappend` wbc)
@@ -205,32 +216,32 @@ instance (Monad m, Monoid v) => C.Category (Widget w s v m) where
 
 -- | No monad instance for Widget is possible, however an arrow is possible.
 -- The Arrow instance monoidally appends the Window, and uses the inner Gadget Arrow instance.
-instance (Monad m, Monoid v) => Arrow (Widget w s v m) where
+instance (Monad m, Monoid v) => Arrow (Widget s v m) where
     arr f = dimap f id C.id
     first = first'
 
-instance (Monad m) => Choice (Widget w s v m) where
+instance (Monad m) => Choice (Widget s v m) where
     left' (Widget w bc) = Widget w (left' bc)
 
-instance (Monad m, Monoid v) => ArrowChoice (Widget w s v m) where
+instance (Monad m, Monoid v) => ArrowChoice (Widget s v m) where
     left = left'
 
-statically :: (Monad m, Monoid c) => Window m s v -> Widget w s v m a c
+statically :: (Monad m, Monoid c) => Window m s v -> Widget s v m a c
 statically w = Widget w mempty
 
-dynamically :: (Monad m, Monoid v) => Gadget w s m a c -> Widget w s v m a c
+dynamically :: (Monad m, Monoid v) => Gadget s m a c -> Widget s v m a c
 dynamically = Widget mempty
 
-type instance Dispatched (Widget w s v m a c) = Dispatched (Gadget w s m a c)
-instance Monad m => Dispatch (Widget w s v m a c) (Widget w s v m b c) a b where
+type instance Dispatched (Widget s v m a c) = Dispatched (Gadget s m a c)
+instance Monad m => Dispatch (Widget s v m a c) (Widget s v m b c) a b where
   dispatch p w = Widget
     (widgetWindow w)
     (dispatch p $ widgetGadget w)
 
-type instance Implanted (Widget w s v m a c) =
-     PairMaybeFunctor (Implanted (Gadget w s m a c))
+type instance Implanted (Widget s v m a c) =
+     PairMaybeFunctor (Implanted (Gadget s m a c))
        (Implanted (Window m s v))
-instance Monad m => Implant (Widget w s v m a c) (Widget w t v m a c) s t where
+instance Monad m => Implant (Widget s v m a c) (Widget t v m a c) s t where
   implant l w = Widget
     (implant (sndLensLike l) $ widgetWindow w)
     (implant (fstLensLike l) $ widgetGadget w)
