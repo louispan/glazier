@@ -18,7 +18,7 @@ library
   exposed-modules:      Glazier
                       -- , Glazier.Example
                       , Glazier.Strict
-                      -- , Glazier.Lazy
+                      , Glazier.Lazy
   build-depends:        base >= 4.7 && < 5
                       , lens
                       , mmorph
