@@ -1,3 +1,6 @@
+[![Hackage](https://img.shields.io/hackage/v/glazier.svg)](https://hackage.haskell.org/package/glazier)
+[![Build Status](https://secure.travis-ci.org/louispan/glazier.png?branch=master)](http://travis-ci.org/louispan/glazier)
+
 Functional version of (Elm Update/View & startApp architecture) enabling composable widgets, and a FRP-like framework.
 
 See [slides](http://www.slideshare.net/LouisPan3/composable-widgets-with-reactive-pipes)
