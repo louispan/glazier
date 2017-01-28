@@ -246,8 +246,6 @@ instance Monad m => Implant (Widget s v m a c) (Widget t v m a c) s t where
     (implant (sndLensLike l) $ widgetWindow w)
     (implant (fstLensLike l) $ widgetGadget w)
 
--- -------------------------------------------------------------------------------
-
 -- | This can be used to hold two LensLike functors.
 -- The inner LensLike functor can be extracted from a @LensLike (PairMaybeFunctor f g) s t a b@
 -- using 'fstLensLike' or 'sndLensLike'.

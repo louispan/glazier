@@ -14,12 +14,10 @@ import Control.Category
 import Control.Lens
 import Control.Monad.Reader
 import Control.Monad.RWS.CPS hiding ((<>))
--- import Control.Monad.RWS.Lazy
 import Data.Foldable
 import Data.List
 import Data.Semigroup
 import Glazier
--- import Glazier.Lazy
 import Glazier.Strict
 import Prelude hiding (id, (.))
 
@@ -63,18 +61,19 @@ instance AsSet (Set a) a where
 -- The original action is wrapped using the given prism and will only
 -- modify the state if the preview of the prism is not Nothing.
 -- The view will be mempty if the model is Nothing.
+-- Widget was a w s m c v
+-- Widget s v m a c
 optionalExample ::
-  ( Monoid d
+  ( Monoid v
   , Monoid c
-  , Semigroup d
+  , Semigroup v
   , Semigroup c
-  , AsSet a a2
+  , AsSet a s
   , AsReset a
-  , AsAction a (Maybe a2 -> Maybe a2)
-  , Monoid w
+  , AsAction a (Maybe s -> Maybe s)
   , Monad m
   )
-  => Prism' a a1 -> Widget a1 w a2 m c d -> Widget a w (Maybe a2) m c d
+  => Prism' a a' -> Widget s v m a' c -> Widget (Maybe s) v m a c
 optionalExample p w =
      (
      implant _Just -- original update will only work if model is Just
@@ -82,9 +81,9 @@ optionalExample p w =
      ) w
   <> statically mempty -- change mempty to specify a rendering function when Nothing
   <> dynamically
-    (  dispatch _Set    (toGadget $ \a _ -> pure (mempty, Just $ getSet a, mempty))
-    <> dispatch _Action (toGadget $ \(Action f) s -> pure (mempty, f s, mempty))
-    <> dispatch _Reset  (toGadget $ \_ _ -> pure (mempty, Nothing, mempty))
+    (  dispatch _Set    (review _GadgetT $ \a _ -> pure (mempty,Just $ getSet a))
+    <> dispatch _Action (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
+    <> dispatch _Reset  (review _GadgetT $ \_ _ -> pure (mempty, Nothing))
     )
 
 -- | Transforms a widget into an list widget.
@@ -99,18 +98,17 @@ optionalExample p w =
 -- modify the state of the head.
 -- The view will be mempty if Nil.
 listExample ::
-  ( Monoid d
+  ( Monoid v
   , Monoid c
-  , Semigroup d
+  , Semigroup v
   , Semigroup c
   , AsTail a
   , AsConsAction a s
   , AsAction a ([s] -> [s])
-  , Monoid w
   , Monad m
   )
-  => Prism' b a -> Widget a w s m c d -> Widget b w [s] m c d
-listExample p (Widget u (Window d)) =
+  => Prism' b a -> Widget s v m a c -> Widget [s] v m b c
+listExample p (Widget (Window d) u) =
      -- Create a list rendering function by
      -- interspercing the separator with the View from the original widget.
      statically (Window . ReaderT $ \ss -> do
@@ -118,9 +116,9 @@ listExample p (Widget u (Window d)) =
                         pure (fold $ intersperse separator ss'))
   <> dynamically
     (  implant (ix 0) u -- original update will only work on the head of list
-    <> dispatch _Tail       (toGadget $ \_ s -> pure (mempty, tail s , mempty))
-    <> dispatch _ConsAction (toGadget $ \(ConsAction a) s -> pure (mempty, a : s, mempty))
-    <> dispatch _Action     (toGadget $ \(Action f) s -> pure (mempty, f s, mempty))
+    <> dispatch _Tail       (review _GadgetT $ \_ s -> pure (mempty, tail s))
+    <> dispatch _ConsAction (review _GadgetT $ \(ConsAction a) s -> pure (mempty, a : s))
+    <> dispatch _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
     )
   & dispatch p -- make original action part of a smaller action
  where separator = mempty -- change mempty to specify a rendering function
@@ -133,21 +131,20 @@ listExample p (Widget u (Window d)) =
 -- * A tuple of (key, original action)
 -- The original action is now a tuple with an additional key, which will act on the widget if the key exists in the map.
 indexedExample ::
-  ( Monoid d
+  ( Monoid v
   , Monoid c
   , Field2 b b a a
   , Field1 b b (Index (t s)) (Index (t s))
   , Ixed (t s)
-  , Semigroup d
+  , Semigroup v
   , Semigroup c
   , AsAction b (t s -> t s)
   , IxValue (t s) ~ s
-  , Monoid w
   , Monad m
   , Traversable t
   )
-  => Widget a w s m c d -> Widget b w (t s) m c d
-indexedExample (Widget g (Window d)) =
+  => Widget s v m a c -> Widget (t s) v m b c
+indexedExample (Widget (Window d) g) =
      -- Create a rendering function by folding the original view function
      statically (Window . ReaderT $ \ss -> do
                         ss' <- traverse (runReaderT d) ss
@@ -166,5 +163,5 @@ indexedExample (Widget g (Window d)) =
          zoom (ix k) (magnify _2 g)
        )
     <>
-      dispatch _Action     (toGadget $ \(Action f) s -> pure (mempty, f s, mempty))
+      dispatch _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
     )
