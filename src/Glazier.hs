@@ -107,8 +107,8 @@ hoistWindow g = _Wrapping Window %~ hoist g
 -- aboveWindow :: (Window m s v -> Window m' s' v') -> (s -> m v) -> (s' -> m' v')
 -- aboveWindow f = from _Window %~ f
 --
--- mkWindow :: (s -> m v) -> Window m s v
--- mkWindow = review _Window
+-- mkWindow' :: (s -> m v) -> Window m s v
+-- mkWindow' = review _Window
 --
 -- runWindow' :: Window m s v -> (s -> m v)
 -- runWindow' = view _Window

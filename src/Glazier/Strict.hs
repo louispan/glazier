@@ -79,8 +79,8 @@ hoistGadget g = _Wrapping Gadget %~ hoist (hoist g)
 -- aboveGadget :: (Gadget s m a c -> Gadget s' m' a' c') -> (a -> s -> m (c, s)) (a' -> s' -> m' (c', s'))
 -- aboveGadget f = from _Gadget %~ f
 --
--- mkGadget :: (a -> s -> m (c, s)) -> Gadget s m a c
--- mkGadget = review _Gadget
+-- mkGadget' :: (a -> s -> m (c, s)) -> Gadget s m a c
+-- mkGadget' = review _Gadget
 --
 -- runGadget' :: Gadget s m a c -> (a -> s -> m (c, s))
 -- runGadget' = view _Gadget
@@ -174,11 +174,11 @@ makeFields ''Widget
 -- aboveWidget :: (Widget s v m a c -> Widget s' v' m' a' c') -> (s -> m v, a -> s -> m (c, s)) -> (s' -> m' v', a' -> s' -> m' (c', s'))
 -- aboveWidget f = from _Widget %~ f
 --
--- mkWidget :: (s -> m v, a -> s -> m (c, s)) -> Widget s v m a c
--- mkWidget = review _Widget
+-- mkWidget' :: (s -> m v, a -> s -> m (c, s)) -> Widget s v m a c
+-- mkWidget' = review _Widget
 --
--- runWidget :: Widget s v m a c -> (s -> m v, a -> s -> m (c, s))
--- runWidget = view _Widget
+-- runWidget' :: Widget s v m a c -> (s -> m v, a -> s -> m (c, s))
+-- runWidget' = view _Widget
 --
 _Widget :: Iso (Widget s v m a c) (Widget s' v' m' a' c')
            (s -> m v, a -> s -> m (c, s)) (s' -> m' v', a' -> s' -> m' (c', s'))
@@ -192,11 +192,11 @@ _Widget = iso (\(Widget w g) -> (view _Window w, view _Gadget g))
 -- overWidget :: (Widget s v m a c -> Widget s' v' m' a' c') -> (Window m s v, Gadget s m a c) -> (Window m' s' v', Gadget s' m' a' c')
 -- overWidget f = from _WrappingWidget %~ f
 --
--- mkWidget' :: (Window m s v, Gadget s m a c) -> Widget s v m a c
--- mkWidget' = review _WrappingWidget
+-- mkWidget :: (Window m s v, Gadget s m a c) -> Widget s v m a c
+-- mkWidget = review _WrappingWidget
 --
--- runWidget' :: Widget s v m a c -> (Window m s v, Gadget s m a c)
--- runWidget' = view _WrappingWidget
+-- runWidget :: Widget s v m a c -> (Window m s v, Gadget s m a c)
+-- runWidget = view _WrappingWidget
 _WrappingWidget :: Iso (Widget s v m a c) (Widget s' v' m' a' c')
            (Window m s v, Gadget s m a c) (Window m' s' v', Gadget s' m' a' c')
 _WrappingWidget = iso (\(Widget w g) -> (w, g))
