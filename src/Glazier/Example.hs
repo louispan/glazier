@@ -13,7 +13,6 @@ module Glazier.Example where
 import Control.Category
 import Control.Lens
 import Control.Monad.Reader
-import Control.Monad.RWS.CPS hiding ((<>))
 import Data.Foldable
 import Data.List
 import Data.Semigroup
