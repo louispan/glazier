@@ -80,9 +80,9 @@ optionalExample p w =
      ) w
   <> statically mempty -- change mempty to specify a rendering function when Nothing
   <> dynamically
-    (  dispatch _Set    (review _GadgetT $ \a _ -> pure (mempty,Just $ getSet a))
-    <> dispatch _Action (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
-    <> dispatch _Reset  (review _GadgetT $ \_ _ -> pure (mempty, Nothing))
+    (  dispatch _Set    (review _Gadget $ \a _ -> pure (mempty,Just $ getSet a))
+    <> dispatch _Action (review _Gadget $ \(Action f) s -> pure (mempty, f s))
+    <> dispatch _Reset  (review _Gadget $ \_ _ -> pure (mempty, Nothing))
     )
 
 -- | Transforms a widget into an list widget.
@@ -115,9 +115,9 @@ listExample p (Widget (Window d) u) =
                         pure (fold $ intersperse separator ss'))
   <> dynamically
     (  implant (ix 0) u -- original update will only work on the head of list
-    <> dispatch _Tail       (review _GadgetT $ \_ s -> pure (mempty, tail s))
-    <> dispatch _ConsAction (review _GadgetT $ \(ConsAction a) s -> pure (mempty, a : s))
-    <> dispatch _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
+    <> dispatch _Tail       (review _Gadget $ \_ s -> pure (mempty, tail s))
+    <> dispatch _ConsAction (review _Gadget $ \(ConsAction a) s -> pure (mempty, a : s))
+    <> dispatch _Action     (review _Gadget $ \(Action f) s -> pure (mempty, f s))
     )
   & dispatch p -- make original action part of a smaller action
  where separator = mempty -- change mempty to specify a rendering function
@@ -162,5 +162,5 @@ indexedExample (Widget (Window d) g) =
          zoom (ix k) (magnify _2 g)
        )
     <>
-      dispatch _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
+      dispatch _Action     (review _Gadget $ \(Action f) s -> pure (mempty, f s))
     )

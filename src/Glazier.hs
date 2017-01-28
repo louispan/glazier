@@ -37,8 +37,8 @@
 -- * 'implant' is used to modify the model type.
 module Glazier
     ( Window(..)
-    , _WindowT
-    , _WindowT'
+    , _Window
+    , _Window'
     , hoistWindow
     , Implanted
     , Implant(..)
@@ -85,17 +85,13 @@ newtype Window m s v = Window
 
 makeWrapped ''Window
 
--- | lens 4.15.1 doesn't have a general enough ReaderT iso
-_WrappingReaderT :: Iso (ReaderT r m a) (ReaderT r' m' a') (r -> m a) (r' -> m' a')
-_WrappingReaderT = iso runReaderT ReaderT
-
 -- | NB lift can be simulated:
 -- liftWindow :: (MonadTrans t, Monad m) => Window m s v -> Window (t m) s v
 -- liftWindow = hoistWindow lift
 hoistWindow :: (Monad m) => (forall a. m a -> n a) -> Window m s v -> Window n s v
 hoistWindow g = _Wrapping Window %~ hoist g
 
--- | This in conjuction with Wrapped instance gives the following functions:
+-- | This Iso gives the following functions:
 -- liftWindow :: (MonadTrans t, Monad m) => Window m s v -> Window (t m) s v
 -- liftWindow = hoistWindow lift
 --
@@ -106,16 +102,22 @@ hoistWindow g = _Wrapping Window %~ hoist g
 -- overWindow f = _Unwrapping Window %~ f
 --
 -- belowWindow :: ((s -> m v) -> (s' -> m' v')) -> Window m s v -> Window m' s' v'
--- belowWindow f = _WindowT %~ f
+-- belowWindow f = _Window %~ f
 --
 -- aboveWindow :: (Window m s v -> Window m' s' v') -> (s -> m v) -> (s' -> m' v')
--- aboveWindow f = from _WindowT %~ f
-_WindowT :: Iso (Window m s v) (Window m' s' v') (s -> m v) (s' -> m' v')
-_WindowT = _Wrapping Window . iso runReaderT ReaderT -- lens 4.15.1 doesn't have a general enough ReaderT iso
+-- aboveWindow f = from _Window %~ f
+--
+-- mkWindow :: (s -> m v) -> Window m s v
+-- mkWindow = review _Window
+--
+-- runWindow' :: Window m s v -> (s -> m v)
+-- runWindow' = view _Window
+_Window :: Iso (Window m s v) (Window m' s' v') (s -> m v) (s' -> m' v')
+_Window = _Wrapping Window . iso runReaderT ReaderT -- lens 4.15.1 doesn't have a general enough ReaderT iso
 
 -- | Non polymorphic version of _WindowT
-_WindowT' :: Iso' (Window m s v) (s -> m v)
-_WindowT' = _WindowT
+_Window' :: Iso' (Window m s v) (s -> m v)
+_Window' = _Window
 
 instance (Applicative m, Semigroup v) => Semigroup (Window m s v) where
     (Window f) <> (Window g) = Window $ ReaderT $ \a ->
@@ -127,10 +129,10 @@ instance (Applicative m, Monoid v) => Monoid (Window m s v) where
         mappend <$> runReaderT f a <*> runReaderT g a
 
 instance Monad m => Profunctor (Window m) where
-    dimap f g = _WindowT %~ (runKleisli . dimap f g . Kleisli)
+    dimap f g = _Window %~ (runKleisli . dimap f g . Kleisli)
 
 instance Monad m => Strong (Window m) where
-    first' = _WindowT %~ (runKleisli . first' . Kleisli)
+    first' = _Window %~ (runKleisli . first' . Kleisli)
 
 instance Monad m => C.Category (Window m) where
     id = Window . ReaderT $ runKleisli C.id
@@ -138,13 +140,13 @@ instance Monad m => C.Category (Window m) where
 
 instance Monad m => Arrow (Window m) where
     arr f = Window $ ReaderT $ runKleisli $ arr f
-    first = _WindowT %~ (runKleisli . first . Kleisli)
+    first = _Window %~ (runKleisli . first . Kleisli)
 
 instance Monad m => Choice (Window m) where
-    left' = _WindowT %~ (runKleisli . left' . Kleisli)
+    left' = _Window %~ (runKleisli . left' . Kleisli)
 
 instance Monad m => ArrowChoice (Window m) where
-    left = _WindowT %~ (runKleisli . left . Kleisli)
+    left = _Window %~ (runKleisli . left . Kleisli)
 
 instance Monad m => ArrowApply (Window m) where
     app = Window . ReaderT $ \(Window (ReaderT bc), b) -> bc b

@@ -9,10 +9,14 @@
 
 module Glazier.Strict
     ( Gadget(..)
-    , _GadgetT
-    , _GadgetT'
+    , _Gadget
+    , _Gadget'
     , hoistGadget
     , Widget(..)
+    , _Widget
+    , _Widget'
+    , _WrappingWidget
+    , _WrappingWidget'
     , hoistWidget
     , HasWindow(..)
     , HasGadget(..)
@@ -62,7 +66,7 @@ makeWrapped ''Gadget
 hoistGadget :: (Monad m) => (forall b. m b -> n b) -> Gadget s m a c -> Gadget s n a c
 hoistGadget g = _Wrapping Gadget %~ hoist (hoist g)
 
--- | This in conjuction with Wrapped instance gives the following functions:
+-- | This Iso gives the following functions:
 -- underGadget :: (ReaderT a (StateT s m) c -> ReaderT a' (StateT s' m') c') -> Gadget s m a c -> Gadget s' m' a' c'
 -- underGadget f = _Wrapping Gadget %~ f
 --
@@ -70,16 +74,22 @@ hoistGadget g = _Wrapping Gadget %~ hoist (hoist g)
 -- overGadget f = _Unwrapping Gadget %~ f
 --
 -- belowGadget :: (a -> s -> m (c, s)) (a' -> s' -> m' (c', s')) -> Gadget s m a c -> Gadget s' m' a' c'
--- belowGadget f = _GadgetT %~ f
+-- belowGadget f = _Gadget %~ f
 --
 -- aboveGadget :: (Gadget s m a c -> Gadget s' m' a' c') -> (a -> s -> m (c, s)) (a' -> s' -> m' (c', s'))
--- aboveGadget f = from _GadgetT %~ f
-_GadgetT :: Iso (Gadget s m a c) (Gadget s' m' a' c') (a -> s -> m (c, s)) (a' -> s' -> m' (c', s'))
-_GadgetT = _Wrapping Gadget . iso runReaderT ReaderT . iso (runStateT .) (StateT .)
+-- aboveGadget f = from _Gadget %~ f
+--
+-- mkGadget :: (a -> s -> m (c, s)) -> Gadget s m a c
+-- mkGadget = review _Gadget
+--
+-- runGadget' :: Gadget s m a c -> (a -> s -> m (c, s))
+-- runGadget' = view _Gadget
+_Gadget :: Iso (Gadget s m a c) (Gadget s' m' a' c') (a -> s -> m (c, s)) (a' -> s' -> m' (c', s'))
+_Gadget = _Wrapping Gadget . iso runReaderT ReaderT . iso (runStateT .) (StateT .)
 
--- | Non polymorphic version of _GadgetT
-_GadgetT' :: Iso' (Gadget s m a c) (a -> s -> m (c, s))
-_GadgetT' = _GadgetT
+-- | Non polymorphic version of _Gadget
+_Gadget' :: Iso' (Gadget s m a c) (a -> s -> m (c, s))
+_Gadget' = _Gadget
 
 instance (Monad m, Semigroup c) => Semigroup (Gadget s m a c) where
     (Gadget f) <> (Gadget g) = Gadget $ (<>) <$> f <*> g
@@ -155,11 +165,55 @@ data Widget s v m a c = Widget
 
 makeFields ''Widget
 
+-- | This Iso gives the following functions:
+-- belowWidget :: ((s -> m v, a -> s -> m (c, s)) -> (s' -> m' v', a' -> s' -> m' (c', s'))) -> Widget s v m a c -> Widget s' v' m' a' c'
+-- belowWidget f = _Widget %~ f
+--
+-- aboveWidget :: (Widget s v m a c -> Widget s' v' m' a' c') -> (s -> m v, a -> s -> m (c, s)) -> (s' -> m' v', a' -> s' -> m' (c', s'))
+-- aboveWidget f = from _Widget %~ f
+--
+-- mkWidget :: (s -> m v, a -> s -> m (c, s)) -> Widget s v m a c
+-- mkWidget = review _Widget
+--
+-- runWidget :: Widget s v m a c -> (s -> m v, a -> s -> m (c, s))
+-- runWidget = view _Widget
+--
+_Widget :: Iso (Widget s v m a c) (Widget s' v' m' a' c')
+           (s -> m v, a -> s -> m (c, s)) (s' -> m' v', a' -> s' -> m' (c', s'))
+_Widget = iso (\(Widget w g) -> (view _Window w, view _Gadget g))
+               (\(w, g) -> Widget (review _Window w) (review _Gadget g))
+
+-- | This Iso gives the following functions:
+-- underWidget :: ((Window m s v, Gadget s m a c) -> (Window m' s' v', Gadget s' m' a' c')) -> Widget s v m a c -> Widget s' v' m' a' c'
+-- underWidget f = _WrappingWidget %~ f
+--
+-- overWidget :: (Widget s v m a c -> Widget s' v' m' a' c') -> (Window m s v, Gadget s m a c) -> (Window m' s' v', Gadget s' m' a' c')
+-- overWidget f = from _WrappingWidget %~ f
+--
+-- mkWidget' :: (Window m s v, Gadget s m a c) -> Widget s v m a c
+-- mkWidget' = review _WrappingWidget
+--
+-- runWidget' :: Widget s v m a c -> (Window m s v, Gadget s m a c)
+-- runWidget' = view _WrappingWidget
+_WrappingWidget :: Iso (Widget s v m a c) (Widget s' v' m' a' c')
+           (Window m s v, Gadget s m a c) (Window m' s' v', Gadget s' m' a' c')
+_WrappingWidget = iso (\(Widget w g) -> (w, g))
+               (\(w, g) -> Widget w g)
+
+-- | Non polymorphic version of _WrappingWidget
+_WrappingWidget' :: Iso' (Widget s v m a c) (Window m s v, Gadget s m a c)
+_WrappingWidget' = _WrappingWidget
+
+-- | Non polymorphic version of _Widget
+_Widget' :: Iso' (Widget s v m a c) (s -> m v, a -> s -> m (c, s))
+_Widget' = _Widget
+
 -- | NB lift can be simulated:
 -- liftWidget :: (MonadTrans t, Monad m) => Widget s v m a c -> Widget s v (t m) a c
 -- liftWidget = hoistWidget lift
 hoistWidget :: (Monad m) => (forall x. m x -> n x) -> Widget s v m a c -> Widget s v n a c
-hoistWidget f (Widget w g) = Widget (hoistWindow f w) (hoistGadget f g)
+-- hoistWidget f (Widget w g) = Widget (hoistWindow f w) (hoistGadget f g)
+hoistWidget f = _WrappingWidget %~ \(w, g) -> (hoistWindow f w, hoistGadget f g)
 
 instance (Monad m, Semigroup c, Semigroup v) => Semigroup (Widget s v m a c) where
     w1 <> w2 = Widget
