@@ -39,6 +39,7 @@ module Glazier
     ( Window(..)
     , _WindowT
     , _WindowT'
+    , runWindowT
     , hoistWindow
     , Implanted
     , Implant(..)
@@ -116,6 +117,10 @@ _WindowT = _Wrapping Window . iso runReaderT ReaderT -- lens 4.15.1 doesn't have
 -- | Non polymorphic version of _WindowT
 _WindowT' :: Iso' (Window m s v) (s -> m v)
 _WindowT' = _WindowT
+
+-- | Run using underlying monad.
+runWindowT :: Window m s v -> s -> m v
+runWindowT = view _WindowT
 
 instance (Applicative m, Semigroup v) => Semigroup (Window m s v) where
     (Window f) <> (Window g) = Window $ ReaderT $ \a ->
