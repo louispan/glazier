@@ -10,7 +10,6 @@ maintainer:          louis@pan.me
 copyright:           2016 Louis Pan
 category:            FRP
 build-type:          Simple
--- extra-source-files:
 cabal-version:       >=1.10
 tested-with:         GHC == 7.10.3, GHC == 8.0.1
 
