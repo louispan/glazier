@@ -109,6 +109,7 @@ instance Monad m => Strong (Gadget s m) where
 instance Monad m => C.Category (Gadget s m) where
     id = Gadget $ ReaderT $ \a -> StateT $ \s -> pure (a, s)
     Gadget (ReaderT bc) . Gadget (ReaderT ab) = Gadget $ ReaderT $ \a -> StateT $ \s -> do
+        -- This line is the main difference between Strict and Lazy versions
         (b, s') <- runStateT (ab a) s
         runStateT (bc b) s'
 
@@ -119,6 +120,7 @@ instance Monad m => Arrow (Gadget s m) where
 instance Monad m => Choice (Gadget s m) where
     left' (Gadget (ReaderT bc)) = Gadget $ ReaderT $ \db -> StateT $ \s -> case db of
         Left b -> do
+            -- This line is the main difference between Strict and Lazy versions
             (c, s') <- runStateT (bc b) s
             pure (Left c, s')
         Right d -> pure (Right d, s)
