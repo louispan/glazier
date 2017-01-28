@@ -1,4 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -13,7 +12,6 @@ module Glazier.Strict
     , _GadgetT
     , _GadgetT'
     , hoistGadget
-    , runGadgetT
     , Widget(..)
     , hoistWidget
     , HasWindow(..)
@@ -82,10 +80,6 @@ _GadgetT = _Wrapping Gadget . iso runReaderT ReaderT . iso (runStateT .) (StateT
 -- | Non polymorphic version of _GadgetT
 _GadgetT' :: Iso' (Gadget s m a c) (a -> s -> m (c, s))
 _GadgetT' = _GadgetT
-
--- | Run using underlying monad.
-runGadgetT :: Gadget s m a c -> a -> s -> m (c, s)
-runGadgetT = view _GadgetT
 
 instance (Monad m, Semigroup c) => Semigroup (Gadget s m a c) where
     (Gadget f) <> (Gadget g) = Gadget $ (<>) <$> f <*> g
