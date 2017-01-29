@@ -9,13 +9,13 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
--- | Functional version of (Elm Brief/View & startApp architecture) enabling composable widgets, and a FRP-like framework.
+-- | Functional version of (Elm View/Update & startApp architecture) enabling composable widgets, and a FRP-like framework.
 --
--- This framework makes it easier to modularize the Elm architecture idea of View/Brief:
+-- This framework makes it easier to modularize the Elm architecture idea of View/Update:
 -- based on the deprecated Elm Architecture version of Jan 2016
 -- https://github.com/evancz/elm-architecture-tutorial/tree/de5682a5a8e4459aed4637533adb25e462f8a2ae
 --
--- The Elm View/Brief is basically as follows:
+-- The Elm View/Update is basically as follows:
 --
 -- @
 -- data Model = Blah....
