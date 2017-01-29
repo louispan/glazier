@@ -22,6 +22,9 @@ module Glazier.Strict
     , HasGadget(..)
     , statically
     , dynamically
+    -- * Re-exports
+    -- $reexports
+    , module Glazier
     ) where
 
 import Control.Applicative
