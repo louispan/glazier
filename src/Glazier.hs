@@ -28,7 +28,7 @@
 -- view :: Signal Address -> Model -> Html
 -- @
 --
--- This module uses isomorphic implementations Brief and View resulting in instances can be be composed together into larger Widgets.
+-- This module uses isomorphic Window and Gadget resulting in instances can be be composed together into larger Widgets.
 -- Original inspiration from https://arianvp.me/lenses-and-prisms-for-modular-clientside-apps/
 --
 -- This framework provides three main combinators:
@@ -98,6 +98,8 @@ hoistWindow :: (Monad m) => (forall a. m a -> n a) -> Window m s v -> Window n s
 hoistWindow g = _Wrapping Window %~ hoist g
 
 -- | This Iso gives the following functions:
+--
+-- @
 -- liftWindow :: (MonadTrans t, Monad m) => Window m s v -> Window (t m) s v
 -- liftWindow = hoistWindow lift
 --
@@ -118,10 +120,12 @@ hoistWindow g = _Wrapping Window %~ hoist g
 --
 -- runWindow' :: Window m s v -> (s -> m v)
 -- runWindow' = view _Window
+-- @
+--
 _Window :: Iso (Window m s v) (Window m' s' v') (s -> m v) (s' -> m' v')
 _Window = _Wrapping Window . iso runReaderT ReaderT -- lens 4.15.1 doesn't have a general enough ReaderT iso
 
--- | Non polymorphic version of _WindowT
+-- | Non polymorphic version of _Window
 _Window' :: Iso' (Window m s v) (s -> m v)
 _Window' = _Window
 

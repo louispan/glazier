@@ -22,7 +22,6 @@ module Glazier.Strict
     , statically
     , dynamically
     -- * Re-exports
-    -- $reexports
     , module Glazier
     ) where
 
@@ -75,6 +74,8 @@ hoistGadget :: (Monad m) => (forall b. m b -> n b) -> Gadget s m a c -> Gadget s
 hoistGadget g = _Wrapping Gadget %~ hoist (hoist g)
 
 -- | This Iso gives the following functions:
+--
+-- @
 -- underGadget :: (ReaderT a (StateT s m) c -> ReaderT a' (StateT s' m') c') -> Gadget s m a c -> Gadget s' m' a' c'
 -- underGadget f = _Wrapping Gadget %~ f
 --
@@ -92,6 +93,8 @@ hoistGadget g = _Wrapping Gadget %~ hoist (hoist g)
 --
 -- runGadget' :: Gadget s m a c -> (a -> s -> m (c, s))
 -- runGadget' = view _Gadget
+-- @
+--
 _Gadget :: Iso (Gadget s m a c) (Gadget s' m' a' c') (a -> s -> m (c, s)) (a' -> s' -> m' (c', s'))
 _Gadget = _Wrapping Gadget . iso runReaderT ReaderT . iso (runStateT .) (StateT .)
 
@@ -176,6 +179,8 @@ data Widget s v m a c = Widget
 makeFields ''Widget
 
 -- | This Iso gives the following functions:
+--
+-- @
 -- belowWidget :: ((s -> m v, a -> s -> m (c, s)) -> (s' -> m' v', a' -> s' -> m' (c', s'))) -> Widget s v m a c -> Widget s' v' m' a' c'
 -- belowWidget f = _Widget %~ f
 --
@@ -187,6 +192,7 @@ makeFields ''Widget
 --
 -- runWidget' :: Widget s v m a c -> (s -> m v, a -> s -> m (c, s))
 -- runWidget' = view _Widget
+-- @
 --
 _Widget :: Iso (Widget s v m a c) (Widget s' v' m' a' c')
            (s -> m v, a -> s -> m (c, s)) (s' -> m' v', a' -> s' -> m' (c', s'))
@@ -194,6 +200,8 @@ _Widget = iso (\(Widget w g) -> (view _Window w, view _Gadget g))
                (\(w, g) -> Widget (review _Window w) (review _Gadget g))
 
 -- | This Iso gives the following functions:
+--
+-- @
 -- underWidget :: ((Window m s v, Gadget s m a c) -> (Window m' s' v', Gadget s' m' a' c')) -> Widget s v m a c -> Widget s' v' m' a' c'
 -- underWidget f = _WrappingWidget %~ f
 --
@@ -205,6 +213,8 @@ _Widget = iso (\(Widget w g) -> (view _Window w, view _Gadget g))
 --
 -- runWidget :: Widget s v m a c -> (Window m s v, Gadget s m a c)
 -- runWidget = view _WrappingWidget
+-- @
+--
 _WrappingWidget :: Iso (Widget s v m a c) (Widget s' v' m' a' c')
            (Window m s v, Gadget s m a c) (Window m' s' v', Gadget s' m' a' c')
 _WrappingWidget = iso (\(Widget w g) -> (w, g))
