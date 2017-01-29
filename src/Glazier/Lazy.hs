@@ -9,6 +9,7 @@
 
 module Glazier.Lazy
     ( Gadget(..)
+    , HasGadget(..)
     , _Gadget
     , _Gadget'
     , hoistGadget
@@ -18,8 +19,6 @@ module Glazier.Lazy
     , _WrappingWidget
     , _WrappingWidget'
     , hoistWidget
-    , HasWindow(..)
-    , HasGadget(..)
     , statically
     , dynamically
     -- * Re-exports
@@ -60,6 +59,12 @@ newtype Gadget s m a c = Gadget
                , MonadFix
                , MonadIO
                )
+
+class HasGadget s a | s -> a where
+  gadget :: Lens' s a
+
+instance HasGadget (Gadget s m a c) (Gadget s m a c) where
+  gadget = id
 
 makeWrapped ''Gadget
 
