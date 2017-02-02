@@ -1,5 +1,5 @@
 name:                glazier
-version:             0.6.2.3
+version:             0.7.0.0
 synopsis:            Composable widgets framework
 description:         Please see README.md
 homepage:            https://github.com/louispan/glazier#readme
@@ -16,9 +16,13 @@ tested-with:         GHC == 8.0.1
 library
   hs-source-dirs:      src
   exposed-modules:      Glazier
-                      , Glazier.Example
-                      , Glazier.Lazy
-                      , Glazier.Strict
+                        Glazier.Class
+                        Glazier.Example
+                        Glazier.Gadget.Lazy
+                        Glazier.Gadget.Strict
+                        Glazier.Widget.Lazy
+                        Glazier.Widget.Strict
+                        Glazier.Window
   build-depends:        base >= 4.7 && < 5
                       , lens >= 4 && < 5
                       , mmorph >= 1 && < 2

@@ -17,7 +17,6 @@ import Data.Foldable
 import Data.List
 import Data.Semigroup
 import Glazier
-import Glazier.Strict
 import Prelude hiding (id, (.))
 
 newtype Action a = Action { getAction :: a }
