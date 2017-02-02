@@ -96,6 +96,7 @@ makeWrapped ''Window
 -- liftWindow = hoistWindow lift
 hoistWindow :: (Monad m) => (forall a. m a -> n a) -> Window m s v -> Window n s v
 hoistWindow g = _Wrapping Window %~ hoist g
+{-# INLINABLE hoistWindow #-}
 
 -- | This Iso gives the following functions:
 --
@@ -124,48 +125,67 @@ hoistWindow g = _Wrapping Window %~ hoist g
 --
 _Window :: Iso (Window m s v) (Window m' s' v') (s -> m v) (s' -> m' v')
 _Window = _Wrapping Window . iso runReaderT ReaderT -- lens 4.15.1 doesn't have a general enough ReaderT iso
+{-# INLINABLE _Window #-}
 
 -- | Non polymorphic version of _Window
 _Window' :: Iso' (Window m s v) (s -> m v)
 _Window' = _Window
+{-# INLINABLE _Window' #-}
 
 instance (Applicative m, Semigroup v) => Semigroup (Window m s v) where
     (Window f) <> (Window g) = Window $ ReaderT $ \a ->
         (<>) <$> runReaderT f a <*> runReaderT g a
+    {-# INLINABLE (<>) #-}
 
 instance (Applicative m, Monoid v) => Monoid (Window m s v) where
     mempty = Window $ ReaderT $ const $ pure mempty
+    {-# INLINABLE mempty #-}
+
     (Window f) `mappend` (Window g) = Window $ ReaderT $ \a ->
         mappend <$> runReaderT f a <*> runReaderT g a
+    {-# INLINABLE mappend #-}
 
 instance Monad m => Profunctor (Window m) where
     dimap f g = _Window %~ (runKleisli . dimap f g . Kleisli)
+    {-# INLINABLE dimap #-}
 
 instance Monad m => Strong (Window m) where
     first' = _Window %~ (runKleisli . first' . Kleisli)
+    {-# INLINABLE first' #-}
 
 instance Monad m => C.Category (Window m) where
     id = Window . ReaderT $ runKleisli C.id
+    {-# INLINABLE id #-}
+
     Window (ReaderT k) . Window (ReaderT l) = Window . ReaderT . runKleisli $ Kleisli k C.. Kleisli l
+    {-# INLINABLE (.) #-}
 
 instance Monad m => Arrow (Window m) where
     arr f = Window $ ReaderT $ runKleisli $ arr f
+    {-# INLINABLE arr #-}
+
     first = _Window %~ (runKleisli . first . Kleisli)
+    {-# INLINABLE first #-}
 
 instance Monad m => Choice (Window m) where
     left' = _Window %~ (runKleisli . left' . Kleisli)
+    {-# INLINABLE left' #-}
 
 instance Monad m => ArrowChoice (Window m) where
     left = _Window %~ (runKleisli . left . Kleisli)
+    {-# INLINABLE left #-}
 
 instance Monad m => ArrowApply (Window m) where
     app = Window . ReaderT $ \(Window (ReaderT bc), b) -> bc b
+    {-# INLINABLE app #-}
 
 instance MonadPlus m => ArrowZero (Window m) where
     zeroArrow = Window mzero
+    {-# INLINABLE zeroArrow #-}
 
 instance MonadPlus m => ArrowPlus (Window m) where
     Window a <+> Window b = Window (a `mplus` b)
+    {-# INLINABLE (<+>) #-}
 
 -------------------------------------------------------------------------------
 
@@ -173,15 +193,16 @@ instance MonadPlus m => ArrowPlus (Window m) where
 -- NB. This is 'Control.Lens.Zoom' for Notify.
 type family Implanted m :: * -> *
 class Implant m n s t | m -> s, n -> t, m t -> n, n s -> m where
-  implant :: LensLike' (Implanted m) t s -> m -> n
+    implant :: LensLike' (Implanted m) t s -> m -> n
 
 type instance Implanted (Window m s v) = Z.Effect m v
 instance Monad m => Implant (Window m s v) (Window m t v) s t where
-  implant l (Window m) = Window $ magnify l m
+    implant l (Window m) = Window $ magnify l m
+    {-# INLINABLE implant #-}
 
 -------------------------------------------------------------------------------
 type family Dispatched m :: * -> *
 
 -- | Changes the action type given a lens, prism or traversal
 class Dispatch m n b a | m -> b, n -> a, m a -> n, n b -> m where
-  dispatch :: LensLike' (Dispatched m) a b -> m -> n
+    dispatch :: LensLike' (Dispatched m) a b -> m -> n
