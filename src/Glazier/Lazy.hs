@@ -7,7 +7,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Glazier.Strict
+module Glazier.Lazy
     ( Gadget(..)
     , HasGadget(..)
     , _Gadget
