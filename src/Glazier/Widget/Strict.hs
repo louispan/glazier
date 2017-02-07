@@ -199,12 +199,12 @@ instance Monad m => Dispatch (Widget s v m a c) (Widget s v m b c) a b where
     {-# INLINABLE dispatch #-}
 
 type instance Implanted (Widget s v m a c) =
-     PairMaybeFunctor (Implanted (Gadget s m a c))
-       (Implanted (Window m s v))
+     PairMaybeFunctor (Implanted (Window m s v))
+       (Implanted (Gadget s m a c))
 instance Monad m => Implant (Widget s v m a c) (Widget t v m a c) s t where
     implant l w = Widget
-        (implant (sndLensLike l) $ widgetWindow w)
-        (implant (fstLensLike l) $ widgetGadget w)
+        (implant (fstLensLike l) $ widgetWindow w)
+        (implant (sndLensLike l) $ widgetGadget w)
     {-# INLINABLE implant #-}
 
 -- -------------------------------------------------------------------------------
