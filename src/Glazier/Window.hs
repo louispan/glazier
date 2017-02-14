@@ -74,11 +74,6 @@ newtype Window m s v = Window
                , MonadIO
                , MonadZip
                )
-class HasWindow s a | s -> a where
-  window :: Lens' s a
-
-instance HasWindow (Window m s v) (Window m s v) where
-  window = id
 
 makeWrapped ''Window
 

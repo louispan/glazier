@@ -71,7 +71,7 @@ optionalExample ::
   , AsAction a (Maybe s -> Maybe s)
   , Monad m
   )
-  => Prism' a a' -> Widget s v m a' c -> Widget (Maybe s) v m a c
+  => Prism' a a' -> Widget m s v m a' c -> Widget m (Maybe s) v m a c
 optionalExample p w =
      (
      implant _Just -- original update will only work if model is Just
@@ -105,7 +105,7 @@ listExample ::
   , AsAction a ([s] -> [s])
   , Monad m
   )
-  => Prism' b a -> Widget s v m a c -> Widget [s] v m b c
+  => Prism' b a -> Widget m s v m a c -> Widget m [s] v m b c
 listExample p (Widget (Window d) u) =
      -- Create a list rendering function by
      -- interspercing the separator with the View from the original widget.
@@ -141,7 +141,7 @@ indexedExample ::
   , Monad m
   , Traversable t
   )
-  => Widget s v m a c -> Widget (t s) v m b c
+  => Widget m s v m a c -> Widget m (t s) v m b c
 indexedExample (Widget (Window d) g) =
      -- Create a rendering function by folding the original view function
      statically (Window . ReaderT $ \ss -> do

@@ -41,12 +41,6 @@ newtype Gadget s m a c = Gadget
                , MonadIO
                )
 
-class HasGadget s a | s -> a where
-  gadget :: Lens' s a
-
-instance HasGadget (Gadget s m a c) (Gadget s m a c) where
-  gadget = id
-
 makeWrapped ''Gadget
 
 -- | NB lift can be simulated:
