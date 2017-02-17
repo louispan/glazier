@@ -43,23 +43,17 @@ import qualified Control.Monad.Fail as Fail
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Morph
 import Control.Monad.Reader
-import Control.Monad.State.Strict
 import Data.Semigroup
 import Glazier.Class
 
 -------------------------------------------------------------------------------
 
 -- | The Elm view function is basically @view :: model -> html@
--- This is be ehanced with monadic effects with ReaderT.
--- The render output can be wrapped in a WriterT to make it more composable.
--- We use a CPS-style WriterT (ie a StateT) to avoid space leaks.
+-- This can be enhanced with monadic effects with ReaderT.
 -- This is named Window instead of View to avoid confusion with view from Control.Lens
--- NB. This is the same formulation as 'Glaizer.GadgetT'.
--- The only difference is 'WindowT' only has 'Glazier.Implant' instance.
-newtype WindowT s v m r = WindowT
-    { runWindowT :: ReaderT s (StateT v m) r
-    } deriving ( MonadState v
-               , MonadReader s
+newtype WindowT s m v = WindowT
+    { runWindowT :: ReaderT s m v
+    } deriving ( MonadReader s
                , Monad
                , Applicative
                , Functor
@@ -72,81 +66,75 @@ newtype WindowT s v m r = WindowT
 
 makeWrapped ''WindowT
 
-type Window s v = WindowT s v Identity
+type Window s = WindowT s Identity
 
-_WindowT :: Iso (WindowT s v m r) (WindowT s' v' m' r') (s -> v -> m (r, v)) (s' -> v' -> m' (r', v'))
-_WindowT = _Wrapping WindowT . iso runReaderT ReaderT . iso (runStateT .) (StateT .)
+_WindowT :: Iso (WindowT s m v) (WindowT s' m' v') (s -> m v) (s' -> m' v')
+_WindowT = _Wrapping WindowT . iso runReaderT ReaderT
 {-# INLINABLE _WindowT #-}
 
 -- | Non polymorphic version of _Window
-_WindowT' :: Iso' (WindowT s v m r) (s -> v -> m (r, v))
+_WindowT' :: Iso' (WindowT s m v) (s -> m v)
 _WindowT' = _WindowT
 {-# INLINABLE _WindowT' #-}
 
-mkWindowT' :: (s -> v -> m (r, v)) -> WindowT s v m r
+mkWindowT' :: (s -> m v) -> WindowT s m v
 mkWindowT' = review _WindowT
 {-# INLINABLE mkWindowT' #-}
 
-runWindowT' :: WindowT s v m r -> (s -> v -> m (r, v))
+runWindowT' :: WindowT s m v -> (s -> m v)
 runWindowT' = view _WindowT
 {-# INLINABLE runWindowT' #-}
 
 belowWindowT ::
-  ((s -> v -> m (r, v)) -> s' -> v' -> m' (r', v'))
-  -> WindowT s v m r -> WindowT s' v' m' r'
+  ((s -> m v) -> (s' -> m' v'))
+  -> WindowT s m v -> WindowT s' m' v'
 belowWindowT f = _WindowT %~ f
 {-# INLINABLE belowWindowT #-}
 
 underWindowT
-    :: (ReaderT s (StateT v m) r -> ReaderT s' (StateT v' m') r')
-    -> WindowT s v m r
-    -> WindowT s' v' m' r'
+    :: (ReaderT s m v -> ReaderT s' m' v')
+    -> WindowT s m v
+    -> WindowT s' m' v'
 underWindowT f = _Wrapping WindowT %~ f
 {-# INLINABLE underWindowT #-}
 
 overWindowT
-    :: (WindowT s v m r -> WindowT s' v' m' r')
-    -> ReaderT s (StateT v m) r
-    -> ReaderT s' (StateT v' m') r'
+    :: (WindowT s m v -> WindowT s' m' v')
+    -> ReaderT s m v
+    -> ReaderT s' m' v'
 overWindowT f = _Unwrapping WindowT %~ f
 {-# INLINABLE overWindowT #-}
 
 aboveWindowT ::
-  (WindowT s v m r -> WindowT s' v' m' r')
-  -> (s -> v -> m (r, v)) -> s' -> v' -> m' (r', v')
+  (WindowT s m v -> WindowT s' m' v')
+  -> (s -> m v) -> (s' -> m' v')
 aboveWindowT f = from _WindowT %~ f
 {-# INLINABLE aboveWindowT #-}
 
-instance MonadTrans (WindowT s v) where
-    lift = WindowT . lift . lift
+instance MonadTrans (WindowT s) where
+    lift = WindowT . lift
 
-instance MFunctor (WindowT s v) where
-    hoist f (WindowT m) = WindowT (hoist (hoist f) m)
+instance MFunctor (WindowT s) where
+    hoist f (WindowT m) = WindowT (hoist f m)
 
-instance (Monad m, Semigroup r) => Semigroup (WindowT s v m r) where
+instance (Applicative m, Semigroup v) => Semigroup (WindowT s m v) where
     (WindowT f) <> (WindowT g) = WindowT $ (<>) <$> f <*> g
     {-# INLINABLE (<>) #-}
 
-instance (Monad m, Monoid r) => Monoid (WindowT s v m r) where
+instance (Applicative m, Monoid v) => Monoid (WindowT s m v) where
     mempty = WindowT $ pure mempty
     {-# INLINABLE mempty #-}
 
     (WindowT f) `mappend` (WindowT g) = WindowT $ mappend <$> f <*> g
     {-# INLINABLE mappend #-}
 
--- | zoom can be used to modify the state inside an Gadget
-type instance Zoomed (WindowT s v m) = Zoomed (ReaderT s (StateT v m))
-instance Monad m => Zoom (WindowT s v m) (WindowT s u m) v u where
-    zoom l = WindowT . zoom l . runWindowT
-    {-# INLINABLE zoom #-}
-
 -- | magnify can be used to modify the action inside an Gadget
-type instance Magnified (WindowT s v m) = Magnified (ReaderT s (StateT v m))
-instance Monad m => Magnify (WindowT s v m) (WindowT t v m) s t where
+type instance Magnified (WindowT s m) = Magnified (ReaderT s m)
+instance Monad m => Magnify (WindowT s m) (WindowT t m) s t where
     magnify l = WindowT . magnify l . runWindowT
     {-# INLINABLE magnify #-}
 
-type instance Implanted (WindowT s v m r) = Magnified (WindowT s v m) r
-instance Monad m => Implant (WindowT s v m r) (WindowT t v m r) s t where
+type instance Implanted (WindowT s m v) = Magnified (WindowT s m) v
+instance Monad m => Implant (WindowT s m v) (WindowT t m v) s t where
     implant = magnify
     {-# INLINABLE implant #-}

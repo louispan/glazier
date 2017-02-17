@@ -34,104 +34,104 @@ import Glazier.Gadget
 import Glazier.Window
 
 -- | A widget is basically a tuple with Gadget and Window, but with handy instances for implant and dispatch.
-data Widget v m r a s n c = Widget
-  { window :: WindowT s v m r
+data Widget m v a s n c = Widget
+  { window :: WindowT s m v
   , gadget :: GadgetT a s n c
   }
 
 -- | polymorphic lens to the window of a widget
-_window :: Lens (Widget v m r a s n c) (Widget v' m' r' a s n c) (WindowT s v m r) (WindowT s v' m' r')
+_window :: Lens (Widget m v a s n c) (Widget m' v' a s n c) (WindowT s m v) (WindowT s m' v')
 _window = lens window (\(Widget _ g) w -> Widget w g)
 {-# INLINABLE _window #-}
 
 -- | polymorphic lens to the gadget of a widget
-_gadget :: Lens (Widget v m r a s n c) (Widget v m r a' s n' c') (GadgetT a s n c) (GadgetT a' s n' c')
+_gadget :: Lens (Widget m v a s n c) (Widget m v a' s n' c') (GadgetT a s n c) (GadgetT a' s n' c')
 _gadget = lens gadget (\(Widget w _) g -> Widget w g)
 {-# INLINABLE _gadget #-}
 
 -- | non polymorphic lens to the window of a widget
-_window' :: Lens' (Widget v m r a s n c) (WindowT s v m r)
+_window' :: Lens' (Widget m v a s n c) (WindowT s m v)
 _window' = _window
 {-# INLINABLE _window' #-}
 
 -- | non polymorphic lens to the gadget of a widget
-_gadget' :: Lens' (Widget v m r a s n c) (GadgetT a s n c)
+_gadget' :: Lens' (Widget m v a s n c) (GadgetT a s n c)
 _gadget' = _gadget
 {-# INLINABLE _gadget' #-}
 
-_Widget :: Iso (Widget v m r a s n c) (Widget v' m' r' a' s' n' c')
-           (s -> v -> m (r, v), a -> s -> n (c, s)) (s' -> v' -> m' (r', v'), a' -> s' -> n' (c', s'))
+_Widget :: Iso (Widget m v a s n c) (Widget m' v' a' s' n' c')
+           (s -> m v, a -> s -> n (c, s)) (s' -> m' v', a' -> s' -> n' (c', s'))
 _Widget = iso (\(Widget w g) -> (view _WindowT w, view _GadgetT g))
                (\(w, g) -> Widget (review _WindowT w) (review _GadgetT g))
 {-# INLINABLE _Widget #-}
 
 -- | Non polymorphic version of _Widget
-_Widget' :: Iso' (Widget v m r a s n c) (s -> v -> m (r, v), a -> s -> n (c, s))
+_Widget' :: Iso' (Widget m v a s n c) (s -> m v, a -> s -> n (c, s))
 _Widget' = _Widget
 {-# INLINABLE _Widget' #-}
 
-_WrappingWidget :: Iso (Widget v m r a s n c) (Widget v' m' r' a' s' n' c')
-           (WindowT s v m r, GadgetT a s n c) (WindowT s' v' m' r', GadgetT a' s' n' c')
+_WrappingWidget :: Iso (Widget m v a s n c) (Widget m' v' a' s' n' c')
+           (WindowT s m v, GadgetT a s n c) (WindowT s' m' v', GadgetT a' s' n' c')
 _WrappingWidget = iso (\(Widget w g) -> (w, g))
                (\(w, g) -> Widget w g)
 {-# INLINABLE _WrappingWidget #-}
 
 -- | Non polymorphic version of _WrappingWidget
-_WrappingWidget' :: Iso' (Widget v m r a s n c) (WindowT s v m r, GadgetT a s n c)
+_WrappingWidget' :: Iso' (Widget m v a s n c) (WindowT s m v, GadgetT a s n c)
 _WrappingWidget' = _WrappingWidget
 {-# INLINABLE _WrappingWidget' #-}
 
-mkWidget :: (WindowT s v m r, GadgetT a s n c) -> Widget v m r a s n c
+mkWidget :: (WindowT s m v, GadgetT a s n c) -> Widget m v a s n c
 mkWidget = review _WrappingWidget
 {-# INLINABLE mkWidget #-}
 
-mkWidget' :: (s -> v -> m (r, v), a -> s -> n (c, s)) -> Widget v m r a s n c
+mkWidget' :: (s -> m v, a -> s -> n (c, s)) -> Widget m v a s n c
 mkWidget' = review _Widget
 {-# INLINABLE mkWidget' #-}
 
-runWidget :: Widget v m r a s n c -> (WindowT s v m r, GadgetT a s n c)
+runWidget :: Widget m v a s n c -> (WindowT s m v, GadgetT a s n c)
 runWidget = view _WrappingWidget
 {-# INLINABLE runWidget #-}
 
-runWidget' :: Widget v m r a s n c -> (s -> v -> m (r, v), a -> s -> n (c, s))
+runWidget' :: Widget m v a s n c -> (s -> m v, a -> s -> n (c, s))
 runWidget' = view _Widget
 {-# INLINABLE runWidget' #-}
 
 belowWidget ::
-  ((s -> v -> m (r, v), a -> s -> n (c, s))
-   -> (s' -> v' -> m' (r', v'), a' -> s' -> n' (c', s')))
-  -> Widget v m r a s n c -> Widget v' m' r' a' s' n' c'
+  ((s -> m v, a -> s -> n (c, s))
+   -> (s' -> m' v', a' -> s' -> n' (c', s')))
+  -> Widget m v a s n c -> Widget m' v' a' s' n' c'
 belowWidget f = _Widget %~ f
 {-# INLINABLE belowWidget #-}
 
 underWidget ::
-  ((WindowT s v m r, GadgetT a s n c)
-   -> (WindowT s' v' m' r', GadgetT a' s' n' c'))
-  -> Widget v m r a s n c -> Widget v' m' r' a' s' n' c'
+  ((WindowT s m v, GadgetT a s n c)
+   -> (WindowT s' m' v', GadgetT a' s' n' c'))
+  -> Widget m v a s n c -> Widget m' v' a' s' n' c'
 underWidget f = _WrappingWidget %~ f
 {-# INLINABLE underWidget #-}
 
 overWidget ::
-  (Widget v m r a s n c -> Widget v' m' r' a' s' n' c')
-  -> (WindowT s v m r, GadgetT a s n c)
-  -> (WindowT s' v' m' r', GadgetT a' s' n' c')
+  (Widget m v a s n c -> Widget m' v' a' s' n' c')
+  -> (WindowT s m v, GadgetT a s n c)
+  -> (WindowT s' m' v', GadgetT a' s' n' c')
 overWidget f = from _WrappingWidget %~ f
 {-# INLINABLE overWidget #-}
 
 aboveWidget ::
-  (Widget v m r a s n c -> Widget v' m' r' a' s' n' c')
-  -> (s -> v -> m (r, v), a -> s -> n (c, s))
-  -> (s' -> v' -> m' (r', v'), a' -> s' -> n' (c', s'))
+  (Widget m v a s n c -> Widget m' v' a' s' n' c')
+  -> (s -> m v, a -> s -> n (c, s))
+  -> (s' -> m' v', a' -> s' -> n' (c', s'))
 aboveWidget f = from _Widget %~ f
 {-# INLINABLE aboveWidget #-}
 
-instance (Monad m, Monad n, Semigroup r, Semigroup c) => Semigroup (Widget v m r a s n c) where
+instance (Applicative m, Monad n, Semigroup v, Semigroup c) => Semigroup (Widget m v a s n c) where
     w1 <> w2 = Widget
       (window w1 <> window w2)
       (gadget w1 <> gadget w2)
     {-# INLINABLE (<>) #-}
 
-instance (Monad m, Monad n, Monoid r, Monoid c) => Monoid (Widget v m r a s n c) where
+instance (Applicative m, Monad n, Monoid v, Monoid c) => Monoid (Widget m v a s n c) where
     mempty = Widget mempty mempty
     {-# INLINABLE mempty #-}
 
@@ -145,7 +145,7 @@ instance (Monad m, Monad n, Monoid r, Monoid c) => Monoid (Widget v m r a s n c)
 -- (Widget w g) = Widget w (id <$> g) =  Widget w g
 -- 2: fmap (f . g) = fmap f . fmap g
 -- (Widget w gad) = Widget w ((f . g) <$> gad) = Widget w ((fmap f . fmap g) gad)
-instance Functor n => Functor (Widget v m r a s n) where
+instance Functor n => Functor (Widget m v a s n) where
     fmap f (Widget w g) = Widget
         w
         (f <$> g)
@@ -167,32 +167,32 @@ instance Functor n => Functor (Widget v m r a s n) where
 --     = Widget (uw <> mempty) (ug <*> pure y)
 --     = Widget (mempty <> uw) (pure ($ y) <*> ug)
 --     = Widget mempty (pure $y) <*> Widget uw ug
-instance (Monad m, Monad n, Monoid r) => Applicative (Widget v m r a s n) where
+instance (Applicative m, Monad n, Monoid v) => Applicative (Widget m v a s n) where
     pure c = Widget mempty (pure c)
     {-# INLINABLE pure #-}
 
     (Widget w1 fg) <*> (Widget w2 g) = Widget (w1 `mappend` w2) (fg <*> g)
     {-# INLINABLE (<*>) #-}
 
-statically :: (Monad n, Monoid c) => WindowT s v m r -> Widget v m r a s n c
+statically :: (Monad n, Monoid c) => WindowT s m v -> Widget m v a s n c
 statically w = Widget w mempty
 {-# INLINABLE statically #-}
 
-dynamically :: (Monad m, Monoid r) => GadgetT a s n c -> Widget v m r a s n c
+dynamically :: (Applicative m, Monoid v) => GadgetT a s n c -> Widget m v a s n c
 dynamically = Widget mempty
 {-# INLINABLE dynamically #-}
 
-type instance Dispatched (Widget v m r a s n c) = Dispatched (GadgetT a s n c)
-instance Monad n => Dispatch (Widget v m r a s n c) (Widget v m r b s n c) a b where
+type instance Dispatched (Widget m v a s n c) = Dispatched (GadgetT a s n c)
+instance Monad n => Dispatch (Widget m v a s n c) (Widget m v b s n c) a b where
     dispatch p w = Widget
         (window w)
         (dispatch p $ gadget w)
     {-# INLINABLE dispatch #-}
 
-type instance Implanted (Widget v m r a s n c) =
-     PairMaybeFunctor (Implanted (WindowT s v m r))
+type instance Implanted (Widget m v a s n c) =
+     PairMaybeFunctor (Implanted (WindowT s m v))
        (Implanted (GadgetT a s n c))
-instance (Monad m, Monad n) => Implant (Widget v m r a s n c) (Widget v m r a t n c) s t where
+instance (Monad m, Monad n) => Implant (Widget m v a s n c) (Widget m v a t n c) s t where
     implant l w = Widget
         (implant (fstLensLike l) $ window w)
         (implant (sndLensLike l) $ gadget w)

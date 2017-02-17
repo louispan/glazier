@@ -13,6 +13,7 @@ module Glazier.Example where
 import Control.Category
 import Control.Lens
 import Control.Monad.Reader
+import Data.Foldable
 import Data.List
 import Data.Semigroup
 import Glazier
@@ -62,15 +63,15 @@ instance AsSet (Set a) a where
 -- Widget s v m a c
 optionalExample ::
   ( Monoid c
-  , Monoid r
+  , Monoid v
   , Semigroup c
-  , Semigroup r
+  , Semigroup v
   , AsSet a s
   , AsReset a
   , AsAction a (Maybe s -> Maybe s)
   , Monad m
   )
-  => Prism' a a' -> Widget v m r a' s m c -> Widget v m r a (Maybe s) m c
+  => Prism' a a' -> Widget m v a' s m c -> Widget m v a (Maybe s) m c
 optionalExample p w =
      (
      implant _Just -- original update will only work if model is Just
@@ -95,22 +96,22 @@ optionalExample p w =
 -- modify the state of the head.
 -- The view will be mempty if Nil.
 listExample ::
-  ( Monoid r
+  ( Monoid v
   , Monoid c
-  , Semigroup r
+  , Semigroup v
   , Semigroup c
   , AsTail a
   , AsConsAction a s
   , AsAction a ([s] -> [s])
   , Monad m
   )
-  => Prism' b a -> Widget v m r a s m c -> Widget v m [r] b [s] m c
+  => Prism' b a -> Widget m v a s m c -> Widget m v b [s] m c
 listExample p (Widget (WindowT d) g) =
      -- Create a list rendering function by
      -- sequencing the View from the original widget.
      statically (WindowT . ReaderT $ \ss -> do
-                        let ms = runReaderT d <$> ss -- [(StateT s m) a]
-                        sequenceA ms)
+                        ss' <- traverse (runReaderT d) ss
+                        pure (fold ss'))
   <> dynamically
     (  implant (ix 0) g -- original update will only work on the head of list
     <> dispatch _Tail       (review _GadgetT $ \_ s -> pure (mempty, tail s))
@@ -127,26 +128,24 @@ listExample p (Widget (WindowT d) g) =
 -- * A tuple of (key, original action)
 -- The original action is now a tuple with an additional key, which will act on the widget if the key exists in the map.
 indexedExample ::
-  ( Monoid r
+  ( Monoid v
   , Monoid c
-  , Monoid (t r)
   , Field2 b b a a
   , Field1 b b (Index (t s)) (Index (t s))
   , Ixed (t s)
-  , Semigroup r
+  , Semigroup v
   , Semigroup c
-  , Semigroup (t r)
   , AsAction b (t s -> t s)
   , IxValue (t s) ~ s
   , Monad m
   , Traversable t
   )
-  => Widget v m r a s m c -> Widget v m (t r) b (t s) m c
+  => Widget m v a s m c -> Widget m v b (t s) m c
 indexedExample (Widget (WindowT d) g) =
      -- Create a rendering function by folding the original view function
      statically (WindowT . ReaderT $ \ss -> do
-                        let ms = runReaderT d <$> ss -- [(StateT s m) a]
-                        sequenceA ms)
+                        ss' <- traverse (runReaderT d) ss
+                        pure (fold ss'))
   <>
     dynamically
     (
