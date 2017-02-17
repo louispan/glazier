@@ -38,32 +38,28 @@
 module Glazier.Window where
 
 import Control.Applicative
-import Control.Arrow
-import qualified Control.Category as C
 import Control.Lens
-import qualified Control.Lens.Internal.Zoom as Z
 import qualified Control.Monad.Fail as Fail
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Morph
 import Control.Monad.Reader
-import Control.Monad.Zip (MonadZip)
-import Data.Profunctor
+import Control.Monad.State.Strict
 import Data.Semigroup
 import Glazier.Class
 
 -------------------------------------------------------------------------------
 
 -- | The Elm view function is basically @view :: model -> html@
--- NB. elm-html is actually @view :: Signal.Address action -> model -> html@
--- where @Signal.Address action@ is the Pipes.Concurrent.Output that is sent
--- actions (eg. when html button is clicked).
--- This address argument is not required in the general case, and is only required for specific widgets on an as needed basis.
--- Therefore, using the fundamental type of @view :: model -> html@
 -- This is be ehanced with monadic effects with ReaderT.
+-- The render output can be wrapped in a WriterT to make it more composable.
+-- We use a CPS-style WriterT (ie a StateT) to avoid space leaks.
 -- This is named Window instead of View to avoid confusion with view from Control.Lens
-newtype Window m s v = Window
-    { runWindow :: ReaderT s m v
-    } deriving ( MonadReader s
+-- NB. This is the same formulation as 'Glaizer.GadgetT'.
+-- The only difference is 'WindowT' only has 'Glazier.Implant' instance.
+newtype WindowT s v m r = WindowT
+    { runWindowT :: ReaderT s (StateT v m) r
+    } deriving ( MonadState v
+               , MonadReader s
                , Monad
                , Applicative
                , Functor
@@ -72,108 +68,85 @@ newtype Window m s v = Window
                , MonadPlus
                , MonadFix
                , MonadIO
-               , MonadZip
                )
 
-makeWrapped ''Window
+makeWrapped ''WindowT
 
--- | NB lift can be simulated:
--- liftWindow :: (MonadTrans t, Monad m) => Window m s v -> Window (t m) s v
--- liftWindow = hoistWindow lift
-hoistWindow :: (Monad m) => (forall a. m a -> n a) -> Window m s v -> Window n s v
-hoistWindow g = _Wrapping Window %~ hoist g
-{-# INLINABLE hoistWindow #-}
+type Window s v = WindowT s v Identity
 
--- | This Iso gives the following functions:
---
--- @
--- liftWindow :: (MonadTrans t, Monad m) => Window m s v -> Window (t m) s v
--- liftWindow = hoistWindow lift
---
--- underWindow :: (ReaderT s m v -> ReaderT s' m' v') -> Window m s v -> Window m' s' v'
--- underWindow f = _Wrapping Window %~ f
---
--- overWindow :: (Window m s v -> Window m' s' v') -> ReaderT s m v -> ReaderT s' m' v'
--- overWindow f = _Unwrapping Window %~ f
---
--- belowWindow :: ((s -> m v) -> (s' -> m' v')) -> Window m s v -> Window m' s' v'
--- belowWindow f = _Window %~ f
---
--- aboveWindow :: (Window m s v -> Window m' s' v') -> (s -> m v) -> (s' -> m' v')
--- aboveWindow f = from _Window %~ f
---
--- mkWindow' :: (s -> m v) -> Window m s v
--- mkWindow' = review _Window
---
--- runWindow' :: Window m s v -> (s -> m v)
--- runWindow' = view _Window
--- @
---
-_Window :: Iso (Window m s v) (Window m' s' v') (s -> m v) (s' -> m' v')
-_Window = _Wrapping Window . iso runReaderT ReaderT -- lens 4.15.1 doesn't have a general enough ReaderT iso
-{-# INLINABLE _Window #-}
+_WindowT :: Iso (WindowT s v m r) (WindowT s' v' m' r') (s -> v -> m (r, v)) (s' -> v' -> m' (r', v'))
+_WindowT = _Wrapping WindowT . iso runReaderT ReaderT . iso (runStateT .) (StateT .)
+{-# INLINABLE _WindowT #-}
 
 -- | Non polymorphic version of _Window
-_Window' :: Iso' (Window m s v) (s -> m v)
-_Window' = _Window
-{-# INLINABLE _Window' #-}
+_WindowT' :: Iso' (WindowT s v m r) (s -> v -> m (r, v))
+_WindowT' = _WindowT
+{-# INLINABLE _WindowT' #-}
 
-instance (Applicative m, Semigroup v) => Semigroup (Window m s v) where
-    (Window f) <> (Window g) = Window $ ReaderT $ \a ->
-        (<>) <$> runReaderT f a <*> runReaderT g a
+mkWindowT' :: (s -> v -> m (r, v)) -> WindowT s v m r
+mkWindowT' = review _WindowT
+{-# INLINABLE mkWindowT' #-}
+
+runWindowT' :: WindowT s v m r -> (s -> v -> m (r, v))
+runWindowT' = view _WindowT
+{-# INLINABLE runWindowT' #-}
+
+belowWindowT ::
+  ((s -> v -> m (r, v)) -> s' -> v' -> m' (r', v'))
+  -> WindowT s v m r -> WindowT s' v' m' r'
+belowWindowT f = _WindowT %~ f
+{-# INLINABLE belowWindowT #-}
+
+underWindowT
+    :: (ReaderT s (StateT v m) r -> ReaderT s' (StateT v' m') r')
+    -> WindowT s v m r
+    -> WindowT s' v' m' r'
+underWindowT f = _Wrapping WindowT %~ f
+{-# INLINABLE underWindowT #-}
+
+overWindowT
+    :: (WindowT s v m r -> WindowT s' v' m' r')
+    -> ReaderT s (StateT v m) r
+    -> ReaderT s' (StateT v' m') r'
+overWindowT f = _Unwrapping WindowT %~ f
+{-# INLINABLE overWindowT #-}
+
+aboveWindowT ::
+  (WindowT s v m r -> WindowT s' v' m' r')
+  -> (s -> v -> m (r, v)) -> s' -> v' -> m' (r', v')
+aboveWindowT f = from _WindowT %~ f
+{-# INLINABLE aboveWindowT #-}
+
+instance MonadTrans (WindowT s v) where
+    lift = WindowT . lift . lift
+
+instance MFunctor (WindowT s v) where
+    hoist f (WindowT m) = WindowT (hoist (hoist f) m)
+
+instance (Monad m, Semigroup r) => Semigroup (WindowT s v m r) where
+    (WindowT f) <> (WindowT g) = WindowT $ (<>) <$> f <*> g
     {-# INLINABLE (<>) #-}
 
-instance (Applicative m, Monoid v) => Monoid (Window m s v) where
-    mempty = Window $ ReaderT $ const $ pure mempty
+instance (Monad m, Monoid r) => Monoid (WindowT s v m r) where
+    mempty = WindowT $ pure mempty
     {-# INLINABLE mempty #-}
 
-    (Window f) `mappend` (Window g) = Window $ ReaderT $ \a ->
-        mappend <$> runReaderT f a <*> runReaderT g a
+    (WindowT f) `mappend` (WindowT g) = WindowT $ mappend <$> f <*> g
     {-# INLINABLE mappend #-}
 
-instance Monad m => Profunctor (Window m) where
-    dimap f g = _Window %~ (runKleisli . dimap f g . Kleisli)
-    {-# INLINABLE dimap #-}
+-- | zoom can be used to modify the state inside an Gadget
+type instance Zoomed (WindowT s v m) = Zoomed (ReaderT s (StateT v m))
+instance Monad m => Zoom (WindowT s v m) (WindowT s u m) v u where
+    zoom l = WindowT . zoom l . runWindowT
+    {-# INLINABLE zoom #-}
 
-instance Monad m => Strong (Window m) where
-    first' = _Window %~ (runKleisli . first' . Kleisli)
-    {-# INLINABLE first' #-}
+-- | magnify can be used to modify the action inside an Gadget
+type instance Magnified (WindowT s v m) = Magnified (ReaderT s (StateT v m))
+instance Monad m => Magnify (WindowT s v m) (WindowT t v m) s t where
+    magnify l = WindowT . magnify l . runWindowT
+    {-# INLINABLE magnify #-}
 
-instance Monad m => C.Category (Window m) where
-    id = Window . ReaderT $ runKleisli C.id
-    {-# INLINABLE id #-}
-
-    Window (ReaderT k) . Window (ReaderT l) = Window . ReaderT . runKleisli $ Kleisli k C.. Kleisli l
-    {-# INLINABLE (.) #-}
-
-instance Monad m => Arrow (Window m) where
-    arr f = Window $ ReaderT $ runKleisli $ arr f
-    {-# INLINABLE arr #-}
-
-    first = _Window %~ (runKleisli . first . Kleisli)
-    {-# INLINABLE first #-}
-
-instance Monad m => Choice (Window m) where
-    left' = _Window %~ (runKleisli . left' . Kleisli)
-    {-# INLINABLE left' #-}
-
-instance Monad m => ArrowChoice (Window m) where
-    left = _Window %~ (runKleisli . left . Kleisli)
-    {-# INLINABLE left #-}
-
-instance Monad m => ArrowApply (Window m) where
-    app = Window . ReaderT $ \(Window (ReaderT bc), b) -> bc b
-    {-# INLINABLE app #-}
-
-instance MonadPlus m => ArrowZero (Window m) where
-    zeroArrow = Window mzero
-    {-# INLINABLE zeroArrow #-}
-
-instance MonadPlus m => ArrowPlus (Window m) where
-    Window a <+> Window b = Window (a `mplus` b)
-    {-# INLINABLE (<+>) #-}
-
-type instance Implanted (Window m s v) = Z.Effect m v
-instance Monad m => Implant (Window m s v) (Window m t v) s t where
-    implant l (Window m) = Window $ magnify l m
+type instance Implanted (WindowT s v m r) = Magnified (WindowT s v m) r
+instance Monad m => Implant (WindowT s v m r) (WindowT t v m r) s t where
+    implant = magnify
     {-# INLINABLE implant #-}
