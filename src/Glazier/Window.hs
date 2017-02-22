@@ -31,10 +31,6 @@
 -- This module uses isomorphic Window and Gadget resulting in instances can be be composed together into larger Widgets.
 -- Original inspiration from https://arianvp.me/lenses-and-prisms-for-modular-clientside-apps/
 --
--- This framework provides three main combinators:
--- * Semigroup and Monoid instances for concatenating widgets.
--- * 'dispatch' is used to re-route the action type.
--- * 'implant' is used to modify the model type.
 module Glazier.Window where
 
 import Control.Applicative
@@ -44,7 +40,6 @@ import Control.Monad.Fix (MonadFix)
 import Control.Monad.Morph
 import Control.Monad.Reader
 import Data.Semigroup
-import Glazier.Class
 
 -------------------------------------------------------------------------------
 
@@ -133,8 +128,3 @@ type instance Magnified (WindowT s m) = Magnified (ReaderT s m)
 instance Monad m => Magnify (WindowT s m) (WindowT t m) s t where
     magnify l = WindowT . magnify l . runWindowT
     {-# INLINABLE magnify #-}
-
-type instance Implanted (WindowT s m v) = Magnified (WindowT s m) v
-instance Monad m => Implant (WindowT s m v) (WindowT t m v) s t where
-    implant = magnify
-    {-# INLINABLE implant #-}

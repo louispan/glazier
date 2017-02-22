@@ -71,18 +71,15 @@ optionalExample ::
   , AsAction a (Maybe s -> Maybe s)
   , Monad m
   )
-  => Prism' a a' -> Widget m v a' s m c -> Widget m v a (Maybe s) m c
-optionalExample p w =
-     (
-     implant _Just -- original update will only work if model is Just
-     >>> dispatch p -- make original action part of a smaller action, in preparation of adding other actions below
-     ) w
-  <> statically mempty -- change mempty to specify a rendering function when Nothing
-  <> dynamically
-    (  dispatch _Set    (review _GadgetT $ \a _ -> pure (mempty, Just $ getSet a))
-    <> dispatch _Action (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
-    <> dispatch _Reset  (review _GadgetT $ \_ _ -> pure (mempty, Nothing))
-    )
+  => Prism' a a' -> (WindowT s m v, GadgetT a' s m c) -> (WindowT (Maybe s) m v, GadgetT a (Maybe s) m c)
+optionalExample p (w, g) = (w', g')
+  where
+    w' = magnify _Just w
+    g' =   magnify p (zoom _Just g) -- original action will only work if model is Just
+        -- new action handlers
+        <> magnify _Set    (review _GadgetT $ \a _ -> pure (mempty, Just $ getSet a))
+        <> magnify _Action (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
+        <> magnify _Reset  (review _GadgetT $ \_ _ -> pure (mempty, Nothing))
 
 -- | Transforms a widget into an list widget.
 -- Given a separator rendering widget, and a widget,
@@ -105,20 +102,21 @@ listExample ::
   , AsAction a ([s] -> [s])
   , Monad m
   )
-  => Prism' b a -> Widget m v a s m c -> Widget m v b [s] m c
-listExample p (Widget (WindowT d) g) =
+  => Prism' b a -> (WindowT s m v, GadgetT a s m c) -> (WindowT [s] m v, GadgetT b [s] m c)
+listExample p (WindowT d, g) = (w', g')
+  where
      -- Create a list rendering function by
      -- sequencing the View from the original widget.
-     statically (WindowT . ReaderT $ \ss -> do
+    w' = WindowT . ReaderT $ \ss -> do
                         ss' <- traverse (runReaderT d) ss
-                        pure (fold ss'))
-  <> dynamically
-    (  implant (ix 0) g -- original update will only work on the head of list
-    <> dispatch _Tail       (review _GadgetT $ \_ s -> pure (mempty, tail s))
-    <> dispatch _ConsAction (review _GadgetT $ \(ConsAction a) s -> pure (mempty, a : s))
-    <> dispatch _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
-    )
-  & dispatch p -- make original action part of a smaller action
+                        pure (fold ss')
+    g' = magnify p (
+            zoom (ix 0) g -- original action will only work on the head of list
+            -- new action handlers
+            <> magnify _Tail       (review _GadgetT $ \_ s -> pure (mempty, tail s))
+            <> magnify _ConsAction (review _GadgetT $ \(ConsAction a) s -> pure (mempty, a : s))
+            <> magnify _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
+        )
 
 -- | Transforms a widget into an dictionary widget.
 -- Given a ordering function, a key function, and a separator rendering function,
@@ -140,25 +138,22 @@ indexedExample ::
   , Monad m
   , Traversable t
   )
-  => Widget m v a s m c -> Widget m v b (t s) m c
-indexedExample (Widget (WindowT d) g) =
+  => (WindowT s m v, GadgetT a s m c) -> (WindowT (t s) m v, GadgetT b (t s) m c)
+indexedExample (WindowT d, g) = (w', g')
+  where
      -- Create a rendering function by folding the original view function
-     statically (WindowT . ReaderT $ \ss -> do
+    w' = WindowT . ReaderT $ \ss -> do
                         ss' <- traverse (runReaderT d) ss
-                        pure (fold ss'))
-  <>
-    dynamically
-    (
-       -- This effectively dispatches the Update
-       -- ie the action type has changed
-       -- so a @dispatch prism@ is not required
-       (do
-         x <- ask
-         let k = x ^. _1
-             -- a = x ^. _2
-         -- run u but for a state implanted by ix k
-         zoom (ix k) (magnify _2 g)
-       )
-    <>
-      dispatch _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))
-    )
+                        pure (fold ss')
+
+    -- This effectively dispatches the Update
+    -- ie the action type has changed
+    -- so a @dispatch prism@ is not required
+    g' = (do
+             x <- ask
+             let k = x ^. _1
+                 -- a = x ^. _2
+             -- run u but for a state implanted by ix k
+             zoom (ix k) (magnify _2 g)
+         )
+         <> magnify _Action     (review _GadgetT $ \(Action f) s -> pure (mempty, f s))

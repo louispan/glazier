@@ -17,15 +17,12 @@ import Control.Monad.Morph
 import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Data.Semigroup
-import Glazier.Class
 
 -- | The Elm update function is @a -> s -> (s, c)@
 -- This is isomorphic to @ReaderT a (State s) c@
 -- ie, given an action "a", and a current state "s", return the new state "s"
 -- and any commands "c" that need to be interpreted externally (eg. download file).
 -- This is named Gadget instead of Update to avoid confusion with update from Data.Map
--- NB. This is the same formulation as 'Glaizer.Window'.
--- The only difference is that Gadget has both 'Implant' and 'Dispatch' instances.
 newtype GadgetT a s m c = GadgetT
     { runGadgetT :: ReaderT a (StateT s m) c
     } deriving ( MonadState s
@@ -115,13 +112,3 @@ type instance Magnified (GadgetT a s m) = Magnified (ReaderT a (StateT s m))
 instance Monad m => Magnify (GadgetT a s m) (GadgetT b s m) a b where
     magnify l = GadgetT . magnify l . runGadgetT
     {-# INLINABLE magnify #-}
-
-type instance Implanted (GadgetT a s m c) = Zoomed (GadgetT a s m) c
-instance Monad m => Implant (GadgetT a s m c) (GadgetT a t m c) s t where
-    implant = zoom
-    {-# INLINABLE implant #-}
-
-type instance Dispatched (GadgetT a s m c) = Magnified (GadgetT a s m) c
-instance Monad m => Dispatch (GadgetT a s m c) (GadgetT b s m c) a b where
-    dispatch = magnify
-    {-# INLINABLE dispatch #-}
