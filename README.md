@@ -6,13 +6,20 @@ Functional version of Elm Action/Model/View/Update architecture, but additionall
 # Features
 
 ## Composable widgets
-Larger widgets can be made out of smaller widgets without changing any existing code, or "lifting of" states.
+In Haskell, we can use lens, prisms and typeclasses to embed a smaller widget within a larger widget; without modifying any existing widget code or manual ["lifting of state"](https://facebook.github.io/react/docs/lifting-state-up.html).
 
-## Easily embed widget
-Use of lens and prisms to embed a smaller widget Action &Model within larger widget Action & Model.
+### Easily convert widgets with lens
+The  `Control.Lens.TH` (original [inspiration from arianp](https://arianvp.me/lenses-and-prisms-for-modular-clientside-apps/)) can be used to automatically generate lens and prisms.
 
-## Typeclasses and Monad Transformers
-Using Haskell typeclasses and monad transformer enables a disciplined and lawful way of composing widgets and effects together.
+The lens and prisms can be used with `Control.Lens`'s [`magnify`](https://hackage.haskell.org/package/lens/docs/Control-Lens-Zoom.html#v:magnify) and [`zoom`](https://hackage.haskell.org/package/lens/docs/Control-Lens-Zoom.html#v:zoom) to convert widgets of different types to the same type.
+
+### Typeclasses for disciplined composition
+Using Haskell typeclasses enables a disciplined and lawful way of composing widgets and effects together.
+The `Monoid` typeclass can be used to simply append rendering, or to merge stateful effects.
+The `Monad` typeclass can be used for complex combinations like creating a list of widgets.
+
+### Monad Transformers for additional pure effects
+Monad transformer allow stacking additional effects lawfully. This can be used to enable a blaze/lucid-style `do` notation for rendering; or stacking stateful effects over STM to allow concurrent but consistent stateful changes.
 
 ## Isolation of IO
 The  stateful effects are pure and do not involve IO. All IO effects are isolated to an interpreter of the command output of the gadget,  reducing the surface area of IO misbehaviour.
