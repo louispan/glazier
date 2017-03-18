@@ -1,14 +1,14 @@
 name:                glazier
-version:             0.11.0.0
-synopsis:            Composable widgets framework
-description:         Please see README.md
+version:             0.11.0.1
+synopsis:            Composable widgets framework with enhanced with transformers and lens.
+description:         Elm-like Action/Model/View/Update framework powered by typeclasses, monad transformers, and lens.
 homepage:            https://github.com/louispan/glazier#readme
 license:             BSD3
 license-file:        LICENSE
 author:              Louis Pan
 maintainer:          louis@pan.me
 copyright:           2016 Louis Pan
-category:            FRP
+category:            FRP, GUI
 build-type:          Simple
 cabal-version:       >=1.10
 tested-with:         GHC == 8.0.1
@@ -16,7 +16,6 @@ tested-with:         GHC == 8.0.1
 library
   hs-source-dirs:      src
   exposed-modules:     Glazier
-                       Glazier.Example
                        Glazier.Gadget
                        Glazier.Window
   build-depends:       base >= 4.7 && < 5
