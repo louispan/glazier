@@ -3,7 +3,7 @@
 
 Functional version of Elm Action/Model/View/Update architecture, but additionally powered by Haskell typeclasses, monad transformers, and lens.
 
-#Features
+# Features
 
 ## Composable widgets
 Larger widgets can be made out of smaller widgets without changing any existing code, or "lifting of" states.
