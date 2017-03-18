@@ -18,7 +18,7 @@ Using Haskell typeclasses and monad transformer enables a disciplined and lawful
 Unlike other GUI frameworks, the signal framework (how the widgets interact with other stateful effects) are not fixed by this library. I recommend using the pipe ecosystem, but you could probably use conduit or manually run the StateT transformer yourself.
 
 ## Combine multiple concurrent stateful effects
-I recommend using the pipe ecosystem the signal framework because [pipes-fluid](https://github.com/louispan/pipes-fluid) allows combining multiple concurrent stateful effects whilst maintaining a single source of truth. This is possible because the stateful effects are running over [STM](http://chimera.labs.oreilly.com/books/1230000000929/ch10.html) which will ensure a consistent ordering of stateful effects. Haskell is
+I recommend using the pipe ecosystem the signal framework because [pipes-fluid](https://github.com/louispan/pipes-fluid) allows combining multiple concurrent stateful effects whilst maintaining a single source of truth. This is possible because the stateful effects are running over [STM](http://chimera.labs.oreilly.com/books/1230000000929/ch10.html) which will ensure a consistent ordering of stateful effects.
 
 ## Isolation of IO
 The  stateful effects are pure and do not involve IO. All IO effects are isolated to an interpreter of the command output of the gadget. This has the benefit of allowing better testing of the intention of gadgets; increasing confidence of the behaviour of the gadget,  reducing the surface area of IO misbehaviour.
@@ -92,7 +92,7 @@ view ::     Reader Model Html
 view ::    ReaderT Model m Html
 view ::    ReaderT Model (ReactMlT m) ()
 ```
-One of the benefits of a monad transformer the ability to stack on top of other monadic effects. For example, in [glazier-react](https://github.com/louispan/glazier-react),  lucid/blazehtml-inspired `do` notation can be used to build up the React elements for rendering by using a StateT monad called  [`ReactMlT`](https://github.com/louispan/glazier-react/blob/master/src/Glazier/React/Markup.hs) 
+One of the benefits of a monad transformer the ability to stack on top of other monadic effects. For example, in [glazier-react](https://github.com/louispan/glazier-react),  lucid/blazehtml-inspired `do` notation can be used to build up the React elements for rendering by using a StateT monad called  [`ReactMlT`](https://github.com/louispan/glazier-react/blob/master/src/Glazier/React/Markup.hs)
 
 #### Composing Windows
 You can combine windows using `Monoid` like [diagrams](http://projects.haskell.org/diagrams/)
