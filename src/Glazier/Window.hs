@@ -91,17 +91,19 @@ instance MFunctor (WindowT s) where
     hoist f (WindowT m) = WindowT (hoist f m)
 
 instance (Applicative m, Semigroup v) => Semigroup (WindowT s m v) where
-    (WindowT f) <> (WindowT g) = WindowT $ (<>) <$> f <*> g
+    (<>) = liftA2 (<>)
     {-# INLINABLE (<>) #-}
 
 instance (Applicative m, Monoid v) => Monoid (WindowT s m v) where
-    mempty = WindowT $ pure mempty
+    mempty = pure mempty
     {-# INLINABLE mempty #-}
 
-    (WindowT f) `mappend` (WindowT g) = WindowT $ mappend <$> f <*> g
+    mappend = liftA2 mappend
     {-# INLINABLE mappend #-}
 
 -- | magnify can be used to modify the action inside an Gadget
+-- This requires UndecidableInstances but is safe because (ReaderT s m)
+-- is smaller than (WindowT s m)
 type instance Magnified (WindowT s m) = Magnified (ReaderT s m)
 instance Monad m => Magnify (WindowT s m) (WindowT t m) s t where
     magnify l = WindowT . magnify l . runWindowT
