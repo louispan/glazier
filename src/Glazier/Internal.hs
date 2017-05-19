@@ -8,44 +8,60 @@ module Glazier.Internal where
 
 import Control.Applicative
 import Control.Lens hiding ((<.>))
-import Control.Lens.Internal.Zoom (Err(..))
 import Data.Functor.Bind
 import Data.Semigroup
 
 ------------------------------------------------------------------------------
--- EffectErr
+-- EffectMay
 ------------------------------------------------------------------------------
+-- | Wrap a Maybe monadic effect with a phantom type argument.
+-- EffectMay will produce Nothing on empty traversals, but uses the monoid of
+-- the result type (inside the Maybe) to mappend traversals.
+-- This is so that I can differentiate between failures and sucessful traversals.
+newtype EffectMay m r a = EffectMay { getEffectMay :: m (Maybe r) }
 
--- | Wrap a Either monadic effect with a phantom type argument.
--- Uses 'Err' which makes a monoid out of Either.
-newtype EffectErr e m r a = EffectErr { getEffectErr :: m (Err e r) }
-
-instance Functor (EffectErr e m r) where
-  fmap _ (EffectErr m) = EffectErr m
+instance Functor (EffectMay m r) where
+  fmap _ (EffectMay m) = EffectMay m
   {-# INLINE fmap #-}
 
-instance Contravariant (EffectErr e m r) where
-  contramap _ (EffectErr m) = EffectErr m
+instance Contravariant (EffectMay m r) where
+  contramap _ (EffectMay m) = EffectMay m
   {-# INLINE contramap #-}
 
-instance (Apply m, Semigroup r) => Semigroup (EffectErr e m r a) where
-  EffectErr ma <> EffectErr mb = EffectErr (liftF2 (<>) ma mb)
+instance (Apply m, Semigroup r) => Semigroup (EffectMay m r a) where
+  EffectMay ma <> EffectMay mb = EffectMay (liftF2 go ma mb)
+    where
+      go Nothing b = b
+      go a Nothing = a
+      go (Just a) (Just b) = Just (a <> b)
   {-# INLINE (<>) #-}
 
-instance (Applicative m, Monoid r) => Monoid (EffectErr e m r a) where
-  mempty = EffectErr (pure mempty)
+instance (Applicative m, Monoid r) => Monoid (EffectMay m r a) where
+  mempty = EffectMay (pure Nothing)
   {-# INLINE mempty #-}
 
-  EffectErr ma `mappend` EffectErr mb = EffectErr (liftA2 mappend ma mb)
+  EffectMay ma `mappend` EffectMay mb = EffectMay (liftA2 go ma mb)
+    where
+      go Nothing b = b
+      go a Nothing = a
+      go (Just a) (Just b) = Just (mappend a b)
   {-# INLINE mappend #-}
 
-instance (Apply m, Semigroup r) => Apply (EffectErr e m r) where
-  EffectErr ma <.> EffectErr mb = EffectErr (liftF2 (<>) ma mb)
+instance (Apply m, Semigroup r) => Apply (EffectMay m r) where
+  EffectMay ma <.> EffectMay mb = EffectMay (liftF2 go ma mb)
+    where
+      go Nothing b = b
+      go a Nothing = a
+      go (Just a) (Just b) = Just (a <> b)
   {-# INLINE (<.>) #-}
 
-instance (Applicative m, Monoid r) => Applicative (EffectErr e m r) where
-  pure _ = EffectErr (pure mempty)
+instance (Applicative m, Monoid r) => Applicative (EffectMay m r) where
+  pure _ = EffectMay (pure Nothing)
   {-# INLINE pure #-}
 
-  EffectErr ma <*> EffectErr mb = EffectErr (liftA2 mappend ma mb)
+  EffectMay ma <*> EffectMay mb = EffectMay (liftA2 go ma mb)
+    where
+      go Nothing b = b
+      go a Nothing = a
+      go (Just a) (Just b) = Just (mappend a b)
   {-# INLINE (<*>) #-}
