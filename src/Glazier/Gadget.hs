@@ -47,46 +47,38 @@ type Gadget a s = GadgetT a s Identity
 
 _GadgetT :: Iso (GadgetT a s m c) (GadgetT a' s' m' c') (a -> s -> m (Maybe c, s)) (a' -> s' -> m' (Maybe c', s'))
 _GadgetT = _Wrapping GadgetT . iso runReaderT ReaderT . iso (runMaybeT .) (MaybeT .) . iso (runStateT .) (StateT .)
-{-# INLINABLE _GadgetT #-}
 
 -- | Non polymorphic version of _Gadget
 _GadgetT' :: Iso' (GadgetT a s m c) (a -> s -> m (Maybe c, s))
 _GadgetT' = _GadgetT
-{-# INLINABLE _GadgetT' #-}
 
 mkGadgetT' :: (a -> s -> m (Maybe c, s)) -> GadgetT a s m c
 mkGadgetT' = review _GadgetT
-{-# INLINABLE mkGadgetT' #-}
 
 runGadgetT' :: GadgetT a s m c -> (a -> s -> m (Maybe c, s))
 runGadgetT' = view _GadgetT
-{-# INLINABLE runGadgetT' #-}
 
 belowGadgetT ::
   ((a -> s -> m (Maybe c, s)) -> a' -> s' -> m' (Maybe c', s'))
   -> GadgetT a s m c -> GadgetT a' s' m' c'
 belowGadgetT f = _GadgetT %~ f
-{-# INLINABLE belowGadgetT #-}
 
 underGadgetT
     :: (ReaderT a (MaybeT (StateT s m)) c -> ReaderT a' (MaybeT (StateT s' m')) c')
     -> GadgetT a s m c
     -> GadgetT a' s' m' c'
 underGadgetT f = _Wrapping GadgetT %~ f
-{-# INLINABLE underGadgetT #-}
 
 overGadgetT
     :: (GadgetT a s m c -> GadgetT a' s' m' c')
     -> ReaderT a (MaybeT (StateT s m)) c
     -> ReaderT a' (MaybeT (StateT s' m')) c'
 overGadgetT f = _Unwrapping GadgetT %~ f
-{-# INLINABLE overGadgetT #-}
 
 aboveGadgetT ::
   (GadgetT a s m c -> GadgetT a' s' m' c')
   -> (a -> s -> m (Maybe c, s)) -> a' -> s' -> m' (Maybe c', s')
 aboveGadgetT f = from _GadgetT %~ f
-{-# INLINABLE aboveGadgetT #-}
 
 -- | Runs a GadgetT with a given action
 withGadgetT :: a -> GadgetT a s m c -> GadgetT a' s m c
@@ -100,14 +92,11 @@ instance MFunctor (GadgetT a s) where
 
 instance (Monad m, Semigroup c) => Semigroup (GadgetT a s m c) where
     (<>) = liftA2 (<>)
-    {-# INLINABLE (<>) #-}
 
 instance (Monad m, Monoid c) => Monoid (GadgetT a s m c) where
     mempty = pure mempty
-    {-# INLINABLE mempty #-}
 
     mappend = liftA2 mappend
-    {-# INLINABLE mappend #-}
 
 -- | zoom can be used to modify the state inside an Gadget
 -- This requires UndecidableInstances but is safe because (ReaderT a (MaybeT (StateT s m)))
@@ -115,7 +104,6 @@ instance (Monad m, Monoid c) => Monoid (GadgetT a s m c) where
 type instance Zoomed (GadgetT a s m) = Zoomed (ReaderT a (MaybeT (StateT s m)))
 instance Monad m => Zoom (GadgetT a s m) (GadgetT a t m) s t where
     zoom l = GadgetT . zoom l . runGadgetT
-    {-# INLINABLE zoom #-}
 
 -- | magnify can be used to modify the action inside an Gadget
 -- This requires UndecidableInstances but is safe because (StateT s m)
@@ -126,4 +114,3 @@ type instance Magnified (GadgetT a s m) = EffectMay (StateT s m)
 instance Monad m => Magnify (GadgetT b s m) (GadgetT a s m) b a where
     magnify l (GadgetT (ReaderT m)) =
         GadgetT . ReaderT . fmap MaybeT $ getEffectMay #. l (EffectMay #. (runMaybeT <$> m))
-    {-# INLINABLE magnify #-}

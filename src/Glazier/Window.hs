@@ -43,46 +43,38 @@ type Window s = WindowT s Identity
 
 _WindowT :: Iso (WindowT s m v) (WindowT s' m' v') (s -> m v) (s' -> m' v')
 _WindowT = _Wrapping WindowT . iso runReaderT ReaderT
-{-# INLINABLE _WindowT #-}
 
 -- | Non polymorphic version of _Window
 _WindowT' :: Iso' (WindowT s m v) (s -> m v)
 _WindowT' = _WindowT
-{-# INLINABLE _WindowT' #-}
 
 mkWindowT' :: (s -> m v) -> WindowT s m v
 mkWindowT' = review _WindowT
-{-# INLINABLE mkWindowT' #-}
 
 runWindowT' :: WindowT s m v -> (s -> m v)
 runWindowT' = view _WindowT
-{-# INLINABLE runWindowT' #-}
 
 belowWindowT ::
   ((s -> m v) -> (s' -> m' v'))
   -> WindowT s m v -> WindowT s' m' v'
 belowWindowT f = _WindowT %~ f
-{-# INLINABLE belowWindowT #-}
 
 underWindowT
     :: (ReaderT s m v -> ReaderT s' m' v')
     -> WindowT s m v
     -> WindowT s' m' v'
 underWindowT f = _Wrapping WindowT %~ f
-{-# INLINABLE underWindowT #-}
 
 overWindowT
     :: (WindowT s m v -> WindowT s' m' v')
     -> ReaderT s m v
     -> ReaderT s' m' v'
 overWindowT f = _Unwrapping WindowT %~ f
-{-# INLINABLE overWindowT #-}
 
 aboveWindowT ::
   (WindowT s m v -> WindowT s' m' v')
   -> (s -> m v) -> (s' -> m' v')
 aboveWindowT f = from _WindowT %~ f
-{-# INLINABLE aboveWindowT #-}
 
 instance MonadTrans (WindowT s) where
     lift = WindowT . lift
@@ -92,14 +84,11 @@ instance MFunctor (WindowT s) where
 
 instance (Applicative m, Semigroup v) => Semigroup (WindowT s m v) where
     (<>) = liftA2 (<>)
-    {-# INLINABLE (<>) #-}
 
 instance (Applicative m, Monoid v) => Monoid (WindowT s m v) where
     mempty = pure mempty
-    {-# INLINABLE mempty #-}
 
     mappend = liftA2 mappend
-    {-# INLINABLE mappend #-}
 
 -- | magnify can be used to modify the action inside an Gadget
 -- This requires UndecidableInstances but is safe because (ReaderT s m)
@@ -107,4 +96,3 @@ instance (Applicative m, Monoid v) => Monoid (WindowT s m v) where
 type instance Magnified (WindowT s m) = Magnified (ReaderT s m)
 instance Monad m => Magnify (WindowT s m) (WindowT t m) s t where
     magnify l = WindowT . magnify l . runWindowT
-    {-# INLINABLE magnify #-}

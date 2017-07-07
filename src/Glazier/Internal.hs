@@ -22,11 +22,9 @@ newtype EffectMay m r a = EffectMay { getEffectMay :: m (Maybe r) }
 
 instance Functor (EffectMay m r) where
   fmap _ (EffectMay m) = EffectMay m
-  {-# INLINE fmap #-}
 
 instance Contravariant (EffectMay m r) where
   contramap _ (EffectMay m) = EffectMay m
-  {-# INLINE contramap #-}
 
 instance (Apply m, Semigroup r) => Semigroup (EffectMay m r a) where
   EffectMay ma <> EffectMay mb = EffectMay (liftF2 go ma mb)
@@ -34,18 +32,15 @@ instance (Apply m, Semigroup r) => Semigroup (EffectMay m r a) where
       go Nothing b = b
       go a Nothing = a
       go (Just a) (Just b) = Just (a <> b)
-  {-# INLINE (<>) #-}
 
 instance (Applicative m, Monoid r) => Monoid (EffectMay m r a) where
   mempty = EffectMay (pure Nothing)
-  {-# INLINE mempty #-}
 
   EffectMay ma `mappend` EffectMay mb = EffectMay (liftA2 go ma mb)
     where
       go Nothing b = b
       go a Nothing = a
       go (Just a) (Just b) = Just (mappend a b)
-  {-# INLINE mappend #-}
 
 instance (Apply m, Semigroup r) => Apply (EffectMay m r) where
   EffectMay ma <.> EffectMay mb = EffectMay (liftF2 go ma mb)
@@ -53,15 +48,12 @@ instance (Apply m, Semigroup r) => Apply (EffectMay m r) where
       go Nothing b = b
       go a Nothing = a
       go (Just a) (Just b) = Just (a <> b)
-  {-# INLINE (<.>) #-}
 
 instance (Applicative m, Monoid r) => Applicative (EffectMay m r) where
   pure _ = EffectMay (pure Nothing)
-  {-# INLINE pure #-}
 
   EffectMay ma <*> EffectMay mb = EffectMay (liftA2 go ma mb)
     where
       go Nothing b = b
       go a Nothing = a
       go (Just a) (Just b) = Just (mappend a b)
-  {-# INLINE (<*>) #-}
