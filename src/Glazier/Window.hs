@@ -25,7 +25,7 @@ import Data.Semigroup
 -- This can be enhanced with monadic effects with ReaderT.
 -- This is named Window instead of View to avoid confusion with view from Control.Lens
 newtype WindowT s m v = WindowT
-    { runWindowT :: ReaderT s m v
+    { getWindowT :: ReaderT s m v
     } deriving ( MonadReader s
                , Monad
                , Applicative
@@ -48,11 +48,11 @@ _WindowT = _Wrapping WindowT . iso runReaderT ReaderT
 _WindowT' :: Iso' (WindowT s m v) (s -> m v)
 _WindowT' = _WindowT
 
-mkWindowT' :: (s -> m v) -> WindowT s m v
-mkWindowT' = review _WindowT
+mkWindowT :: (s -> m v) -> WindowT s m v
+mkWindowT = review _WindowT
 
-runWindowT' :: WindowT s m v -> (s -> m v)
-runWindowT' = view _WindowT
+runWindowT :: WindowT s m v -> (s -> m v)
+runWindowT = view _WindowT
 
 belowWindowT ::
   ((s -> m v) -> (s' -> m' v'))
@@ -95,4 +95,4 @@ instance (Applicative m, Monoid v) => Monoid (WindowT s m v) where
 -- is smaller than (WindowT s m)
 type instance Magnified (WindowT s m) = Magnified (ReaderT s m)
 instance Monad m => Magnify (WindowT s m) (WindowT t m) s t where
-    magnify l = WindowT . magnify l . runWindowT
+    magnify l = WindowT . magnify l . getWindowT
