@@ -27,9 +27,8 @@ import Glazier.Internal
 -- | The Elm view function is basically @view :: model -> html@
 -- This can be enhanced with monadic effects with ReaderT.
 -- This is named Window instead of View to avoid confusion with view from Control.Lens
--- FIXME: Add MaybeT?
 newtype WindowT s m v = WindowT
-    { getWindowT :: ReaderT s (MaybeT m) v
+    { unWindowT :: ReaderT s (MaybeT m) v
     } deriving ( MonadReader s
                , Monad
                , Applicative
@@ -57,6 +56,12 @@ mkWindowT = review _WindowT
 
 runWindowT :: WindowT s m v -> (s -> m (Maybe v))
 runWindowT = view _WindowT
+
+-- mkWindowReaderT :: (a -> MaybeT m c) -> WindowT a sm c
+-- mkWindowReaderT = WindowT . ReaderT
+
+-- runReaderWindowT :: WindowT a m c -> (a -> MaybeT m c)
+-- runReaderWindowT = runReaderT . unWindowT
 
 belowWindowT ::
   ((s -> m (Maybe v)) -> (s' -> m' (Maybe v')))

@@ -28,7 +28,7 @@ import Glazier.Internal
 -- This is named Gadget instead of Update to avoid confusion with update from Data.Map
 -- This is also enhanced with MaybeT for its Alternative instance.
 newtype GadgetT a s m c = GadgetT
-    { getGadgetT :: ReaderT a (MaybeT (StateT s m)) c
+    { unGadgetT :: ReaderT a (MaybeT (StateT s m)) c
     } deriving ( MonadReader a
                , MonadState s
                , Functor
@@ -57,6 +57,12 @@ mkGadgetT = review _GadgetT
 
 runGadgetT :: GadgetT a s m c -> (a -> s -> m (Maybe c, s))
 runGadgetT = view _GadgetT
+
+-- mkGadgetReaderT :: (a -> MaybeT (StateT s m) c) -> GadgetT a s m c
+-- mkGadgetReaderT = GadgetT . ReaderT
+
+-- runReaderGadgetT :: GadgetT a s m c -> (a -> MaybeT (StateT s m) c)
+-- runReaderGadgetT = runReaderT . unGadgetT
 
 belowGadgetT ::
   ((a -> s -> m (Maybe c, s)) -> a' -> s' -> m' (Maybe c', s'))
@@ -103,7 +109,7 @@ instance (Monad m, Monoid c) => Monoid (GadgetT a s m c) where
 -- is smaller than (GadgetT a s m)
 type instance Zoomed (GadgetT a s m) = Zoomed (ReaderT a (MaybeT (StateT s m)))
 instance Monad m => Zoom (GadgetT a s m) (GadgetT a t m) s t where
-    zoom l = GadgetT . zoom l . getGadgetT
+    zoom l = GadgetT . zoom l . unGadgetT
 
 -- | magnify can be used to modify the action inside an Gadget
 -- This requires UndecidableInstances but is safe because (StateT s m)
