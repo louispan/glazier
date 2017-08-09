@@ -62,6 +62,9 @@ _WRMT = _WindowT . iso runReaderT ReaderT . iso (runMaybeT .) (MaybeT .)
 _WRMT' :: Iso' (WindowT s m v) (s -> m (Maybe v))
 _WRMT' = _WRMT
 
+windowWith :: s -> WindowT s m v -> WindowT t m v
+windowWith a = over _WRT (\f _ -> f a)
+
 -- mkWindowT :: (s -> m (Maybe v)) -> WindowT s m v
 -- mkWindowT = review _WRMT'
 

@@ -76,6 +76,9 @@ _GRMST = _GadgetT . iso runReaderT ReaderT .  iso (runMaybeT .) (MaybeT .) . iso
 _GRMST' :: Iso' (GadgetT a s m c) (a -> s -> m (Maybe c, s))
 _GRMST' = _GRMST'
 
+gadgetWith :: a -> GadgetT a s m c -> GadgetT b s m c
+gadgetWith a = over _GRT (\f _ -> f a)
+
 -- mkGadgetT :: (a -> s -> m (Maybe c, s)) -> GadgetT a s m c
 -- mkGadgetT = review _GRMST'
 
