@@ -45,18 +45,42 @@ makeWrapped ''GadgetT
 
 type Gadget a s = GadgetT a s Identity
 
-_GadgetT :: Iso (GadgetT a s m c) (GadgetT a' s' m' c') (a -> s -> m (Maybe c, s)) (a' -> s' -> m' (Maybe c', s'))
-_GadgetT = _Wrapping GadgetT . iso runReaderT ReaderT . iso (runMaybeT .) (MaybeT .) . iso (runStateT .) (StateT .)
+-- _GadgetT :: Iso (GadgetT a s m c) (GadgetT a' s' m' c') (a -> s -> m (Maybe c, s)) (a' -> s' -> m' (Maybe c', s'))
+-- _GadgetT = _Wrapping GadgetT . iso runReaderT ReaderT . iso (runMaybeT .) (MaybeT .) . iso (runStateT .) (StateT .)
 
--- | Non polymorphic version of _Gadget
-_GadgetT' :: Iso' (GadgetT a s m c) (a -> s -> m (Maybe c, s))
+_GadgetT :: Iso (GadgetT a s m c) (GadgetT a' s' m' c')
+                (ReaderT a (MaybeT (StateT s m)) c) (ReaderT a' (MaybeT (StateT s' m')) c')
+_GadgetT = _Wrapping GadgetT
+
+_GadgetT' :: Iso' (GadgetT a s m c) (ReaderT a (MaybeT (StateT s m)) c)
 _GadgetT' = _GadgetT
 
-mkGadgetT :: (a -> s -> m (Maybe c, s)) -> GadgetT a s m c
-mkGadgetT = review _GadgetT
+_GRT :: Iso (GadgetT a s m c) (GadgetT a' s' m' c')
+            (a -> (MaybeT (StateT s m)) c) (a' -> (MaybeT (StateT s' m')) c')
+_GRT = _GadgetT . iso runReaderT ReaderT
 
-runGadgetT :: GadgetT a s m c -> (a -> s -> m (Maybe c, s))
-runGadgetT = view _GadgetT
+_GRT' :: Iso' (GadgetT a s m c) (a -> (MaybeT (StateT s m)) c)
+_GRT' = _GRT
+
+_GRMT :: Iso (GadgetT a s m c) (GadgetT a' s' m' c')
+            (a -> (StateT s m) (Maybe c)) (a' -> (StateT s' m') (Maybe c'))
+_GRMT = _GadgetT . iso runReaderT ReaderT .  iso (runMaybeT .) (MaybeT .)
+
+_GRMT' :: Iso' (GadgetT a s m c) (a -> (StateT s m) (Maybe c))
+_GRMT' = _GRMT
+
+_GRMST :: Iso (GadgetT a s m c) (GadgetT a' s' m' c')
+            (a -> s -> m (Maybe c, s)) (a' -> s' -> m' (Maybe c', s'))
+_GRMST = _GadgetT . iso runReaderT ReaderT .  iso (runMaybeT .) (MaybeT .) . iso (runStateT .) (StateT .)
+
+_GRMST' :: Iso' (GadgetT a s m c) (a -> s -> m (Maybe c, s))
+_GRMST' = _GRMST'
+
+-- mkGadgetT :: (a -> s -> m (Maybe c, s)) -> GadgetT a s m c
+-- mkGadgetT = review _GRMST'
+
+-- runGadgetT :: GadgetT a s m c -> (a -> s -> m (Maybe c, s))
+-- runGadgetT = view _GRMST'
 
 -- mkGadgetReaderT :: (a -> MaybeT (StateT s m) c) -> GadgetT a s m c
 -- mkGadgetReaderT = GadgetT . ReaderT
@@ -64,31 +88,31 @@ runGadgetT = view _GadgetT
 -- runReaderGadgetT :: GadgetT a s m c -> (a -> MaybeT (StateT s m) c)
 -- runReaderGadgetT = runReaderT . unGadgetT
 
-belowGadgetT ::
-  ((a -> s -> m (Maybe c, s)) -> a' -> s' -> m' (Maybe c', s'))
-  -> GadgetT a s m c -> GadgetT a' s' m' c'
-belowGadgetT f = _GadgetT %~ f
+-- belowGadgetT ::
+--   ((a -> s -> m (Maybe c, s)) -> a' -> s' -> m' (Maybe c', s'))
+--   -> GadgetT a s m c -> GadgetT a' s' m' c'
+-- belowGadgetT f = _GRMST %~ f
 
-underGadgetT
-    :: (ReaderT a (MaybeT (StateT s m)) c -> ReaderT a' (MaybeT (StateT s' m')) c')
-    -> GadgetT a s m c
-    -> GadgetT a' s' m' c'
-underGadgetT f = _Wrapping GadgetT %~ f
+-- underGadgetT
+--     :: (ReaderT a (MaybeT (StateT s m)) c -> ReaderT a' (MaybeT (StateT s' m')) c')
+--     -> GadgetT a s m c
+--     -> GadgetT a' s' m' c'
+-- underGadgetT f = _Wrapping GadgetT %~ f
 
-overGadgetT
-    :: (GadgetT a s m c -> GadgetT a' s' m' c')
-    -> ReaderT a (MaybeT (StateT s m)) c
-    -> ReaderT a' (MaybeT (StateT s' m')) c'
-overGadgetT f = _Unwrapping GadgetT %~ f
+-- overGadgetT
+--     :: (GadgetT a s m c -> GadgetT a' s' m' c')
+--     -> ReaderT a (MaybeT (StateT s m)) c
+--     -> ReaderT a' (MaybeT (StateT s' m')) c'
+-- overGadgetT f = _Unwrapping GadgetT %~ f
 
-aboveGadgetT ::
-  (GadgetT a s m c -> GadgetT a' s' m' c')
-  -> (a -> s -> m (Maybe c, s)) -> a' -> s' -> m' (Maybe c', s')
-aboveGadgetT f = from _GadgetT %~ f
+-- aboveGadgetT ::
+--   (GadgetT a s m c -> GadgetT a' s' m' c')
+--   -> (a -> s -> m (Maybe c, s)) -> a' -> s' -> m' (Maybe c', s')
+-- aboveGadgetT f = from _GRMST %~ f
 
--- | Runs a GadgetT with a given action
-withGadgetT :: a -> GadgetT a s m c -> GadgetT a' s m c
-withGadgetT a (GadgetT (ReaderT k)) = GadgetT . ReaderT . const $ k a
+-- -- | Runs a GadgetT with a given action
+-- withGadgetT :: a -> GadgetT a s m c -> GadgetT a' s m c
+-- withGadgetT a (GadgetT (ReaderT k)) = GadgetT . ReaderT . const $ k a
 
 instance MonadTrans (GadgetT a s) where
     lift = GadgetT . lift . lift . lift

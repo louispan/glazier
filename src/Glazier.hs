@@ -20,9 +20,9 @@
 -- # Slides
 -- See [slides](https://github.com/louispan/glazier-react-intro)
 module Glazier
-    ( module Glazier.Window
-    , module Glazier.Gadget
+    ( module Glazier.Gadget
+    , module Glazier.Window
     ) where
 
-import Glazier.Window
 import Glazier.Gadget
+import Glazier.Window

@@ -44,18 +44,29 @@ makeWrapped ''WindowT
 
 type Window s = WindowT s Identity
 
-_WindowT :: Iso (WindowT s m v) (WindowT s' m' v') (s -> m (Maybe v)) (s' -> m' (Maybe v'))
-_WindowT = _Wrapping WindowT . iso runReaderT ReaderT . iso (runMaybeT .) (MaybeT .)
+_WindowT :: Iso (WindowT s m v) (WindowT s' m' v') (ReaderT s (MaybeT m) v) (ReaderT s' (MaybeT m') v')
+_WindowT = _Wrapping WindowT
 
--- | Non polymorphic version of _Window
-_WindowT' :: Iso' (WindowT s m v) (s -> m (Maybe v))
+_WindowT' :: Iso' (WindowT s m v) (ReaderT s (MaybeT m) v)
 _WindowT' = _WindowT
 
-mkWindowT :: (s -> m (Maybe v)) -> WindowT s m v
-mkWindowT = review _WindowT
+_WRT :: Iso (WindowT s m v) (WindowT s' m' v') (s -> MaybeT m v) (s' -> MaybeT m' v')
+_WRT = _WindowT . iso runReaderT ReaderT
 
-runWindowT :: WindowT s m v -> (s -> m (Maybe v))
-runWindowT = view _WindowT
+_WRT' :: Iso' (WindowT s m v) (s -> MaybeT m v)
+_WRT' = _WRT
+
+_WRMT :: Iso (WindowT s m v) (WindowT s' m' v') (s -> m (Maybe v)) (s' -> m' (Maybe v'))
+_WRMT = _WindowT . iso runReaderT ReaderT . iso (runMaybeT .) (MaybeT .)
+
+_WRMT' :: Iso' (WindowT s m v) (s -> m (Maybe v))
+_WRMT' = _WRMT
+
+-- mkWindowT :: (s -> m (Maybe v)) -> WindowT s m v
+-- mkWindowT = review _WRMT'
+
+-- runWindowT :: WindowT s m v -> (s -> m (Maybe v))
+-- runWindowT = view _WRMT'
 
 -- mkWindowReaderT :: (a -> MaybeT m c) -> WindowT a sm c
 -- mkWindowReaderT = WindowT . ReaderT
@@ -63,27 +74,27 @@ runWindowT = view _WindowT
 -- runReaderWindowT :: WindowT a m c -> (a -> MaybeT m c)
 -- runReaderWindowT = runReaderT . unWindowT
 
-belowWindowT ::
-  ((s -> m (Maybe v)) -> (s' -> m' (Maybe v')))
-  -> WindowT s m v -> WindowT s' m' v'
-belowWindowT f = _WindowT %~ f
+-- belowWindowT ::
+--   ((s -> m (Maybe v)) -> (s' -> m' (Maybe v')))
+--   -> WindowT s m v -> WindowT s' m' v'
+-- belowWindowT f = _WRMT %~ f
 
-underWindowT
-    :: (ReaderT s (MaybeT m) v -> ReaderT s' (MaybeT m') v')
-    -> WindowT s m v
-    -> WindowT s' m' v'
-underWindowT f = _Wrapping WindowT %~ f
+-- underWindowT
+--     :: (ReaderT s (MaybeT m) v -> ReaderT s' (MaybeT m') v')
+--     -> WindowT s m v
+--     -> WindowT s' m' v'
+-- underWindowT f = _Wrapping WindowT %~ f
 
-overWindowT
-    :: (WindowT s m v -> WindowT s' m' v')
-    -> ReaderT s (MaybeT m) v
-    -> ReaderT s' (MaybeT m') v'
-overWindowT f = _Unwrapping WindowT %~ f
+-- overWindowT
+--     :: (WindowT s m v -> WindowT s' m' v')
+--     -> ReaderT s (MaybeT m) v
+--     -> ReaderT s' (MaybeT m') v'
+-- overWindowT f = _Unwrapping WindowT %~ f
 
-aboveWindowT ::
-  (WindowT s m v -> WindowT s' m' v')
-  -> (s -> m (Maybe v)) -> (s' -> m' (Maybe v'))
-aboveWindowT f = from _WindowT %~ f
+-- aboveWindowT ::
+--   (WindowT s m v -> WindowT s' m' v')
+--   -> (s -> m (Maybe v)) -> (s' -> m' (Maybe v'))
+-- aboveWindowT f = from _WRMT %~ f
 
 instance MonadTrans (WindowT s) where
     lift = WindowT . lift . lift
