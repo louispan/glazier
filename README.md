@@ -273,3 +273,9 @@ In `Glazier` there is no separate data type for `Widget`. It is just a word for 
 
 ## Galzier.React.Widgets
 [`Glazier.React.Widgets`](https://github.com/louispan/glazier-react-widget) contains a library of reusable widgets. For example, [List Widget](https://github.com/louispan/glazier-react-widget/blob/master/src/Glazier/React/Widgets/List.hs) creates a list of any other widget. Please help me add more widgets to this library!
+
+# Changelog
+
+* 0.12.0.0
+  - Combined WindowT and GadgetT into a single newtype GizmoT.
+  - GizmoT contains MaybeT effects for a consistent Alternative and MonadPlus instance.

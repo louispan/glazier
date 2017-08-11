@@ -15,9 +15,7 @@ tested-with:         GHC == 8.0.1
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Glazier
-                       Glazier.Gadget
-                       Glazier.Window
+  exposed-modules:     Glazier.Gizmo
                        Glazier.Internal
   build-depends:       base >= 4.7 && < 5
                      , lens >= 4 && < 5
