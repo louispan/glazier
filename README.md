@@ -58,23 +58,23 @@ We are able to super-power the Elm architecture when using Haskell, because Hask
 
 ## Model
 In the original Elm Architecture, there is the model with data for logic and rendering. It is usually a record product type.
-```
+```haskell
 data Model = Model { foo :: Int, bar :: Int }
 ```
 `Glazier` uses `Control.Lens` and `TemplateHaskell` to generate lens for the model with [`makeClassy`](https://hackage.haskell.org/package/lens/docs/Control-Lens-TH.html#v:makeClassy).
 
 The lens comes in useful later to embed the model in larger models using  `Control.Lens`'s [`magnify`](https://hackage.haskell.org/package/lens/docs/Control-Lens-Zoom.html#v:magnify) and [`zoom`](https://hackage.haskell.org/package/lens/docs/Control-Lens-Zoom.html#v:zoom).
-```
+```haskell
 makeClassy ''Model
 -- The above generates 'HasModel' class with 'foo' and 'bar' lens
 ```
 ## View
 In the original Elm Architecture, there is a way to render the model:
-```
+```haskell
 view :: Model -> Html
 ```
 In the Elm documentation, you will sometimes see this version:
-```
+```haskell
 view : Signal.Address Action -> Model -> Html
 ```
 where `Signal.Address Action` gives the renderer of Html knowledge of how to dispatch `Action` events.
@@ -83,14 +83,14 @@ However,  the `Signal.Address Action` parameter is actually not the essential fo
 
 ### View renamed to Window
 This `view` function is really just a specialized form of the `ReaderT` transformer.
-```
+```haskell
 view ::                    Model -> Html
 view ::             Reader Model Html
 view :: Monad m => ReaderT Model m Html
 view :: Monad m => ReaderT Model (ReactMlT m) ()
 ```
 In `Glazier`, this is wrapped in a newtype [`WindowT`](https://github.com/louispan/glazier/blob/master/src/Glazier/Window.hs) to allow for custom `Semigroup` and [`Monoid`](https://github.com/louispan/glazier/blob/1b5330be4f2a42c8a86863a8355489bf3a5837f5/src/Glazier/Window.hs#L97) instances. I don't know why the [`transformers`](https://hackage.haskell.org/package/transformers) package don't have these instances by default.
-```
+```haskell
 newtype WindowT s m v = WindowT
     { runWindowT :: ReaderT s m v
     } deriving ( MonadReader s
@@ -108,11 +108,11 @@ One of the benefits of a monad transformer the ability to stack on top of other 
 
 ### Composing Windows
 You can combine windows using `Monoid` like [diagrams](http://projects.haskell.org/diagrams/)
-```
+```haskell
 labelWindow <> textInputWindow
 ```
 Or in more complex ways using `Monad` to render a list of another widget.
-```
+```haskell
 bh “div” [] $ do
    bh “label” [] “hello”
    lf “input” […]
@@ -121,7 +121,7 @@ bh “div” [] $ do
 ### Magnifying windows
 `Window`s have to be the same `model` type to compose together.
 We can use `Control.Lens.magnify` to modify the `model` type to transform different `Window`s into the same type.
-```
+```haskell
 data TodoModel = …
 data AppModel = AppModel { _title :: Text
                          , _todo :: TodoModel }
@@ -136,14 +136,14 @@ todoToAppWindow = magnify todo todoWindow
 
 ## Action
 In Elm, there are events that can happen in to the app. This is a sum type.
-```
+```haskell
 data Action = DoThis | DoThat
 ```
 We can use `Control.Lens` and `TemplateHaskell` to generate prisms for the`Action` with [`makeClassyPrisms`](https://hackage.haskell.org/package/lens/docs/Control-Lens-TH.html#v:makeClassyPrisms).
 
 The prisms comes in useful later to embed the action in larger widgets using  `Control.Lens`'s [`magnify`].
 
-```
+```haskell
 data Action = DoThis | DoThat
 makeClassyPrisms ''Action
 -- The above generates 'AsAction' class with '_DoThis' and '_DoThat' prisms
@@ -151,16 +151,16 @@ makeClassyPrisms ''Action
 
 ## Update
 In Elm, the the app reacts to `Action` events which may modify the model.
-```
+```haskell
 update :: Action -> Model -> Model
 ```
 More complicated widgets also produce a result which is interpreted with effects (possibly IO).
-```
+```haskell
 update : Action -> Model -> (Model, Effects Action)
 ```
 ### Update renamed to Gadget
 The Elm `update` function is just a specialized form of `ReaderT action StateT model`. 
-```
+```haskell
 update :: Action -> Model -> Model
 update :: Action -> Model -> (Model, Commands)
 update :: Action -> State Model Commands
@@ -169,7 +169,7 @@ update :: ReaderT Action (StateT Model m) Commands
 update :: ReaderT Action (StateT Model STM) Commands
 ```
 In `Glazier`, this is wrapped in a newtype [`GadgetT`](https://github.com/louispan/glazier/blob/master/src/Glazier/Gadget.hs) to allow for custom `Semigroup` and [`Monoid`](https://github.com/louispan/glazier/blob/1b5330be4f2a42c8a86863a8355489bf3a5837f5/src/Glazier/Gadget.hs#L97) instances. I don't know why the [`transformers`](https://hackage.haskell.org/package/transformers) package don't have these instances by default.
-```
+```haskell
 newtype GadgetT a s m c = GadgetT
     { runGadgetT :: ReaderT a (StateT s m) c
     } deriving ( MonadState s
@@ -191,11 +191,11 @@ The result of gadget is `Command`, which can be interpreted effectfully. This is
 
 #### Composing Gadget
 You can combine gadgets using `Monoid`.
-```
+```haskell
 labelGadget <> textInputGadget
 ```
 You can use `Monad` to make a gadget of a list (actually a `Map k v`) of gadgets
-```
+```haskell
 listGadget = do
     -- converts original Action to (key, Action)
     (k, _) <- ask
@@ -208,7 +208,7 @@ listGadget = do
 #### Magnifying gadget
 `Gadgets`s have to be the same `action` and  `model` type to compose together.
 We can use `Control.Lens.magnify` to modify the `action` type, and `Control.Lens.zoom` to modify the `model` type, to transform different `Gadget`s into the same type.
-```
+```haskell
 data AppAction
  = ForceRender
  | DestroyTodoAction Int
