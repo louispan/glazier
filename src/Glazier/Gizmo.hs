@@ -64,8 +64,8 @@ _GRMT' :: Iso' (GizmoT i m o) (i -> m (Maybe o))
 _GRMT' = _GRMT
 
 -- | Creates a Gizmo that always uses the provided input.
-withInput :: i -> GizmoT i m o -> GizmoT i m o
-withInput i = over _GRT (\f _ -> f i)
+constantly :: i -> GizmoT i m o -> GizmoT j m o
+constantly i = over _GRT (\f _ -> f i)
 
 instance MonadTrans (GizmoT i) where
     lift = GizmoT . lift . lift
@@ -90,6 +90,10 @@ type instance Magnified (GizmoT i m) = EffectMay m
 instance Monad m => Magnify (GizmoT i m) (GizmoT j m) i j where
     magnify l (GizmoT (ReaderT m)) =
         GizmoT . ReaderT . fmap MaybeT $ getEffectMay #. l (EffectMay #. (runMaybeT <$> m))
+
+-- type instance Magnified (MaybeT (ReaderT b m)) = EffectMay m
+-- instance Monad m => Magnify (MaybeT (ReaderT b m)) (MaybeT (ReaderT a m)) b a where
+--     magnify l (MaybeT (ReaderT m)) = MaybeT (ReaderT (getEffectMay #. l (EffectMay #. m)))
 
 -- | zoom can be used to modify the state inside a Gizmo
 -- This requires UndecidableInstances but is safe because @FocusingMay (Zoomed m)@
