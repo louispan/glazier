@@ -50,10 +50,10 @@ _GizmoT' :: Iso' (GizmoT i m o) (ReaderT i (MaybeT m) o)
 _GizmoT' = _GizmoT
 
 _GRT :: Iso (GizmoT i m o) (GizmoT i' m' o')
-            (i -> (MaybeT m) o) (i' -> (MaybeT m') o')
+            (i -> MaybeT m o) (i' -> MaybeT m' o')
 _GRT = _GizmoT . iso runReaderT ReaderT
 
-_GRT' :: Iso' (GizmoT i m o) (i -> (MaybeT m) o)
+_GRT' :: Iso' (GizmoT i m o) (i -> MaybeT m o)
 _GRT' = _GRT
 
 _GRMT :: Iso (GizmoT i m o) (GizmoT i' m' o')
