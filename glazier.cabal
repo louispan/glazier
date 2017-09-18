@@ -1,7 +1,7 @@
 name:                glazier
 version:             0.12.0.0
-synopsis:            Composable widgets framework with enhanced with transformers and lens.
-description:         Elm-like Action/Model/View/Update framework powered by typeclasses, monad transformers, and lens.
+synopsis:            ReaderT + MaybeT monad transformer.
+description:         ReaderT + MaybeT monad transformer.
 homepage:            https://github.com/louispan/glazier#readme
 license:             BSD3
 license-file:        LICENSE
@@ -15,7 +15,8 @@ tested-with:         GHC == 8.0.1
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Glazier.Gizmo
+  exposed-modules:     Glazier.Carry
+                       Glazier.Gizmo
                        Glazier.Internal
   build-depends:       base >= 4.7 && < 5
                      , lens >= 4 && < 5
