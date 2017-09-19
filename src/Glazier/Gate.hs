@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -53,16 +54,35 @@ instance ArrowChoice (Gate r) where
                                         Left c -> h (Left c)
 
 -- | Like 'Choice' or 'ArrowChoice' but using 'Which'
-instance Choice' (Gate r) where
+instance Faceted (Gate r) where
     faceted (Gate k) = Gate $ \h as -> case trial as of
                                          Left as' -> h (diversify as')
                                          Right a -> k (h . pick) a
 
 -- | Like 'Strong' or 'Arrow' but using 'Many'
-instance Strong' (Gate r') where
+instance Itemized (Gate r') where
     itemized
         :: forall r a b as. UniqueMember a as
         => Gate r a b -> Gate r (Many as) (Many (Replace a b as))
-    itemized (Gate k) =  Gate $ \h as ->
-        let a = fetch @a as
-        in k (h . replace' @a Proxy as) a
+    itemized (Gate k) =  Gate $ \h as -> k (h . replace' @a Proxy as) (fetch @a as)
+
+-- | Like 'Faceted' but transforming from 'Which'
+instance Injected (Gate r) where
+    injected (Gate k) = Gate $ \h as -> case reinterpret as of
+                                         Left as' -> h (diversify as')
+                                         Right as' -> k (h . diversify) as'
+
+-- | Like 'Itemized' but transforming from 'Many'
+instance Projected (Gate r') where
+    projected
+        :: forall r as as' bs. (Select as as', Amend' as bs as')
+        => Gate r (Many as) (Many bs) -> Gate r (Many as') (Many (Replaces as bs as'))
+    projected (Gate k) = Gate $ \h as' -> k (h . amend' @as Proxy as') (select @as as')
+
+-- Gate r (Which as) (Which bs)
+-- Gate r (Which cs) (Which ds)
+-- where some of bs is in cs
+-- but some of bs is not in cs
+-- I want to connect as much of bs to cs
+-- the else out output leftover bs
+-- and (optionally) exposee the bits of cs not in @as@
