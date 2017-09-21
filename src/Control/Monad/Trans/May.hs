@@ -27,7 +27,7 @@ import Data.Profunctor.Unsafe
 import Data.Semigroup
 
 -- | Alternative version of MayT which has Semigroup instance that uses the return type Semigroup
--- and a Monoid mempty that returns Nothing.
+-- and a Monoid instance where mempty returns Nothing.
 newtype MayT m a = MayT { runMayT :: m (Maybe a) }
 
 type May = MayT Identity
