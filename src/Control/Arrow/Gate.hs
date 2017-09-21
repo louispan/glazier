@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
-module Glazier.Gate where
+module Control.Arrow.Gate where
 
 import qualified Control.Category as C
 import Control.Arrow
@@ -61,6 +61,20 @@ and (rmap diversify) on A to expand AOut to include BOut
 and (rmap diversify) on B to expand BOut to include AOut
 and <> the result
 C will take (input of A and B) and put (output of A and B)
+
+
+             ┌-------------------┐
+ AOut        |           ┌----┐  |
+ ------------|-----------|    |  |
+             |           | B  |  | BOut
+             |  ┌----┐   |    |--|-----------
+             |  |    |   |    |  |
+ ------------|--| A  |   └----┘  |
+ AIn         |  |    |-----------|-----------
+             |  |    |           | AOut
+             |  └----┘           |
+             └-------------------┘
+
 -}
 newtype Gate r a b = Gate
     { runGate :: (b -> r) -- given handlers for outputs
