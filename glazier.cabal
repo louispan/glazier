@@ -1,7 +1,7 @@
 name:                glazier
 version:             1.0.0.0
-synopsis:            Miscellaneous controls.
-description:         Miscellaneous controls.
+synopsis:            Miscellaneous control functionality.
+description:         Miscellaneous control functionality.
 homepage:            https://github.com/louispan/glazier#readme
 license:             BSD3
 license-file:        LICENSE
@@ -16,9 +16,9 @@ tested-with:         GHC == 8.0.1
 library
   hs-source-dirs:      src
   exposed-modules:     Control.Arrow.Gate
-                       Control.Monad.Trans.May
   build-depends:       base >= 4.7 && < 5
-                     , data-diverse >= 0.10 && < 1
+                     , contravariant >= 1.4 && < 2
+                     -- , data-diverse >= 0.10 && < 1
                      , lens >= 4 && < 5
                      , mmorph >= 1 && < 2
                      , mtl >= 2 && < 3

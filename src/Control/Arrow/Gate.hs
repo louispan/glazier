@@ -9,10 +9,11 @@
 module Control.Arrow.Gate where
 
 import qualified Control.Category as C
+import Control.Applicative
 import Control.Arrow
-import Data.Diverse
+-- import Data.Diverse
 import Data.Profunctor
-import Data.Proxy
+-- import Data.Proxy
 import Data.Semigroup
 
 {- | 'Gate' is a continuation where given a continuation of an output handler, it will return a input handler.
@@ -34,18 +35,18 @@ C will take (inputs of A), and put (outputs of B + extra outputs of A)
 Both methods can be combined to a C that take (inputs of A + extra inputs of B not in output of A)
 and put (outputs of B + extra outputs of A not in input of B)
 
- Extra BIn   ┌-------------------┐
- not in AOut |           ┌----┐  |
- ------------|-----------|    |  |
-             |           | B  |  | BOut
-             |  ┌----┐   |    |--|-----------
-             |  |    |---|    |  |
- ------------|--| A  |   └----┘  |
- AIn         |  |    |-----------|-----------
-             |  |    |           | Extra AOut
-             |  └----┘           | not in BIn
-             └-------------------┘
-
+             ┌------------------------------┐ Extra AOut
+ AIn         |  ┌----┐                      | not in BIn
+ ------------|--|    |----------------------|-----------
+             |  | A  |              ┌----┐  |
+             |  |    | Part of AOut |    |  |
+             |  |    | that matches |    |  |
+             |  |    | part of BOut |    |  |
+ Extra BIn   |  |    |--------------|    |  |
+ not in AOut |  └----┘              | B  |  | Bout
+ ------------|----------------------|    |--|-----------
+             |                      └----┘  |
+             └------------------------------┘
 
 Ignore input wiring:
 
@@ -82,18 +83,26 @@ newtype Gate r a b = Gate
     }
 
 -- | Used to ignore certain inputs
-filterInput :: Monoid r => (a' -> Maybe a) -> Gate r a b -> Gate r a' b
-filterInput f (Gate k) = Gate $ \h a -> case f a of
-    Nothing -> mempty
+filterInput :: r -> (a' -> Maybe a) -> Gate r a b -> Gate r a' b
+filterInput r f (Gate k) = Gate $ \h a -> case f a of
+    Nothing -> r
     Just a' -> k h a'
 
 -- | Used to ignore certain outputs
-filterOutput :: Monoid r => (b -> Maybe b') -> Gate r a b -> Gate r a b'
-filterOutput g (Gate k) = Gate $ \h a -> k (go h) a
+filterOutput :: r -> (b -> Maybe b') -> Gate r a b -> Gate r a b'
+filterOutput r g (Gate k) = Gate $ \h a -> k (go h) a
   where
     go h b = case g b of
-        Nothing -> mempty
+        Nothing -> r
         Just b' -> h b'
+
+-- -- | isomorphically map the return type
+-- isoReturn :: (r -> r') -> (r' -> r) -> Gate r a b -> Gate r' a b
+-- isoReturn f g (Gate k) = Gate $ \h a -> f (k (g . h) a)
+
+-- | only use the right gate if the left gate doesn't produce anything
+fallback :: Alternative m => Gate (m r) a b -> Gate (m r) a b -> Gate (m r) a b
+fallback (Gate f) (Gate g) = Gate $ \h a -> f h a <|> g h a
 
 -- | Connect in parallel. Input is feed to both gates and the output of
 -- both gates are '<>' together.
@@ -140,28 +149,28 @@ instance ArrowChoice (Gate r) where
                                         Right a' -> k (h . Right) a' -- run through provided gate
                                         Left c -> h (Left c) -- else feed input directly to output
 
--- | Like 'Choice' or 'ArrowChoice' but using 'Which'
-instance Faceted (Gate r) where
-    faceted (Gate k) = Gate $ \h as -> case trial as of
-                                         Right a -> k (h . pick) a -- run through provided gate
-                                         Left as' -> h (diversify as') -- else feed input directly to output
+-- -- | Like 'Choice' or 'ArrowChoice' but using 'Which'
+-- instance Faceted (Gate r) where
+--     faceted (Gate k) = Gate $ \h as -> case trial as of
+--                                          Right a -> k (h . pick) a -- run through provided gate
+--                                          Left as' -> h (diversify as') -- else feed input directly to output
 
--- | Like 'Strong' or 'Arrow' but using 'Many'
-instance Itemized (Gate r') where
-    itemized
-        :: forall r a b as. UniqueMember a as
-        => Gate r a b -> Gate r (Many as) (Many (Replace a b as))
-    itemized (Gate k) =  Gate $ \h as -> k (h . replace' @a Proxy as) (fetch @a as) -- copy annotation to output
+-- -- | Like 'Strong' or 'Arrow' but using 'Many'
+-- instance Itemized (Gate r') where
+--     itemized
+--         :: forall r a b as. UniqueMember a as
+--         => Gate r a b -> Gate r (Many as) (Many (Replace a b as))
+--     itemized (Gate k) =  Gate $ \h as -> k (h . replace' @a Proxy as) (fetch @a as) -- copy annotation to output
 
--- | Like 'Faceted' but transforming from 'Which'
-instance Injected (Gate r) where
-    injected (Gate k) = Gate $ \h as -> case reinterpret as of
-                                         Right as' -> k (h . diversify) as'-- run through provided gate
-                                         Left as' -> h (diversify as') -- else feed input directly to output
+-- -- | Like 'Faceted' but transforming from 'Which'
+-- instance Injected (Gate r) where
+--     injected (Gate k) = Gate $ \h as -> case reinterpret as of
+--                                          Right as' -> k (h . diversify) as'-- run through provided gate
+--                                          Left as' -> h (diversify as') -- else feed input directly to output
 
--- | Like 'Itemized' but transforming from 'Many'
-instance Projected (Gate r') where
-    projected
-        :: forall r as as' bs. (Select as as', Amend' as bs as')
-        => Gate r (Many as) (Many bs) -> Gate r (Many as') (Many (Replaces as bs as'))
-    projected (Gate k) = Gate $ \h as' -> k (h . amend' @as Proxy as') (select @as as') -- copy annotation to output
+-- -- | Like 'Itemized' but transforming from 'Many'
+-- instance Projected (Gate r') where
+--     projected
+--         :: forall r as as' bs. (Select as as', Amend' as bs as')
+--         => Gate r (Many as) (Many bs) -> Gate r (Many as') (Many (Replaces as bs as'))
+--     projected (Gate k) = Gate $ \h as' -> k (h . amend' @as Proxy as') (select @as as') -- copy annotation to output
