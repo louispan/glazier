@@ -37,10 +37,20 @@ resolver: lts-7.19
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
+- location: '/Users/louis/repo/hs/alternators'
+  extra-dep: true
+- location: '/Users/louis/repo/hs/disposable'
+  extra-dep: true
+- location: '/Users/louis/repo/hs/data-diverse'
+  extra-dep: true
+- location: '/Users/louis/repo/hs/data-diverse-lens'
+  extra-dep: true
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
-extra-deps: []
+extra-deps:
+- ghcjs-base-stub-0.1.0.4
+- generic-lens-0.5.1.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}
