@@ -16,19 +16,26 @@ tested-with:         GHC == 8.0.1
 library
   hs-source-dirs:      src
   exposed-modules:     Glazier.Core
+                       Glazier.Core.Also
                        Glazier.Core.Builder
+                       Glazier.Core.Delegate
                        Glazier.Core.Finalizer
                        Glazier.Core.Handler
+                       Glazier.Core.Method
                        Glazier.Core.Initializer
                        Glazier.Core.Obj
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 0.1.3.0
                      , bifunctors >= 5.4.1
+                     , contravariant >= 1.4
                      , data-diverse >= 2.0.2.0
                      , data-diverse-lens >= 2.2.0.0
                      , disposable >= 0.3.0.0
                      , generic-lens >= 0.5.1.0
                      , lens >= 4
+                     , mmorph >= 1
+                     , mtl >= 2
+                     , newtype-generics >= 0.5
                      , transformers >= 0.4
   ghc-options:        -Wall
   default-language:    Haskell2010

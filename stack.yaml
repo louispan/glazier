@@ -51,6 +51,7 @@ packages:
 extra-deps:
 - ghcjs-base-stub-0.1.0.4
 - generic-lens-0.5.1.0
+- newtype-generics-0.5.2
 
 # Override default flag values for local packages and extra-deps
 flags: {}

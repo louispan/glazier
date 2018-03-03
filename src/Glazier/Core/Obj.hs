@@ -9,10 +9,14 @@ import Control.Lens
 import Data.IORef
 import GHC.Generics
 
-data Obj v s = Obj
-    { ref :: IORef v
-    , its :: Lens' v s
-    }
+-- | naming convention:
+--
+-- foo :: Obj v s -> IO ()
+-- foo this@(Z.Obj ref its) = do
+--     obj <- readIORef ref
+--     writeIORef ref (obj & its.bar .~ 5)
+--     doSomethingElseWith this
+data Obj v s = Obj (IORef v) (Lens' v s)
 
 edit :: Lens' s a -> Obj v s -> Obj v a
 edit l (Obj v i) = Obj v (i.l)
