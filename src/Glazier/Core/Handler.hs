@@ -12,7 +12,7 @@ module Glazier.Core.Handler where
 
 import Control.Applicative
 import Control.Arrow
-import Control.Arrow.Esoteric
+import qualified Control.Arrow.Esoteric as E
 import Data.Diverse.Profunctor
 import Data.Function
 import qualified Glazier.Core.Also as Z
@@ -50,7 +50,7 @@ intoH ::
     Handler s m a b
     -> Handler s m b c
     -> Handler s m a c
-intoH f g = f & rk2 (>>>) $ g
+intoH f g = f & E.rk2 (>>>) $ g
 
 -- wack :: Handler s m a b -> Handler s m a b
 -- wack f = f & E.underKleisli2 (>>>) $ (arrowHandler id) & E.underKleisli2 (>>>) $ (arrowHandler id)
@@ -60,7 +60,7 @@ intoH' :: (Injected a2 b1 b2 b3)
     => Handler s m a (Which b1)
     -> Handler s m (Which a2) (Which b2)
     -> Handler s m a (Which b3)
-intoH' f g = f & rk2 (>||>) $ g
+intoH' f g = f & E.rk2 (>||>) $ g
 
 -- | Run one or the other.
 -- Compile error if types in @a1@ are not distinct from types in @a2@
@@ -69,7 +69,7 @@ orH :: ChooseBetween a1 a2 a3 b1 b2 b3
     => Handler s m (Which a1) (Which b1)
     -> Handler s m (Which a2) (Which b2)
     -> Handler s m (Which a3) (Which b3)
-orH f g = f & rk2 (+||+) $ g
+orH f g = f & E.rk2 (+||+) $ g
 
 thenH :: Handler s m a () -> Handler s m a b -> Handler s m a b
 thenH = liftA2 (*>)
