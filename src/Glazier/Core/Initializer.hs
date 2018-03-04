@@ -19,19 +19,19 @@ import qualified Glazier.Core.Obj as Z
 type Initializer s m c = Z.Delegate s m c
 type ObjInitializer v s m c = Initializer (Z.Obj v s) m c
 
--- mempty
-memptyInitializer :: Applicative m => Initializer s m c
-memptyInitializer = mempty
+-- -- mempty
+-- memptyInitializer :: Applicative m => Initializer s m c
+-- memptyInitializer = mempty
 
--- mappend
-mappendInitializer :: Applicative m => Initializer s m c -> Initializer s m c -> Initializer s m c
-infixr 6 `mappendInitializer` -- like mappend
-mappendInitializer = mappend
+-- -- mappend
+-- mappendInitializer :: Applicative m => Initializer s m c -> Initializer s m c -> Initializer s m c
+-- infixr 6 `mappendInitializer` -- like mappend
+-- mappendInitializer = mappend
 
--- Activate left after the right, firing only the result from the right.
--- The binary associative function for 'nulInitializer'.
-thenInitializer :: Initializer m r () -> Initializer m r a -> Initializer m r a
-thenInitializer = (*>)
+-- -- Activate left after the right, firing only the result from the right.
+-- -- The binary associative function for 'nulInitializer'.
+-- thenInitializer :: Initializer m r () -> Initializer m r a -> Initializer m r a
+-- thenInitializer = (*>)
 
 -- -- The identity for 'alsoInitializer'
 -- nulInitializer :: Applicative m => Initializer m s (Which '[])

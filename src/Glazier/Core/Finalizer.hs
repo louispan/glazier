@@ -9,11 +9,11 @@ import qualified Glazier.Core.Method as Z
 -- This must be called before removing widgets from a containing model.
 type Finalizer s m = Z.Method s m CD.Disposable
 
--- mempty
-memptyFinalizer :: Applicative m => Finalizer s m
-memptyFinalizer = mempty
+-- -- mempty
+-- memptyFinalizer :: Applicative m => Finalizer s m
+-- memptyFinalizer = mempty
 
--- mappend
-mappendFinalizer :: Applicative m => Finalizer s m -> Finalizer s m -> Finalizer s m
-mappendFinalizer = mappend
-infixr 6 `mappendFinalizer` -- like mappend
+-- -- mappend
+-- mappendFinalizer :: Applicative m => Finalizer s m -> Finalizer s m -> Finalizer s m
+-- mappendFinalizer = mappend
+-- infixr 6 `mappendFinalizer` -- like mappend

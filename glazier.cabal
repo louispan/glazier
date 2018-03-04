@@ -31,11 +31,12 @@ library
                      , data-diverse >= 2.0.2.0
                      , data-diverse-lens >= 2.2.0.0
                      , disposable >= 0.3.0.0
+                     , esoteric-extras >= 0.0.1.0
                      , generic-lens >= 0.5.1.0
                      , lens >= 4
                      , mmorph >= 1
                      , mtl >= 2
-                     , newtype-generics >= 0.5
+                     , newtype-generics >= 0.5.2.1
                      , transformers >= 0.4
   ghc-options:        -Wall
   default-language:    Haskell2010
