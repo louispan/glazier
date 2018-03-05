@@ -84,8 +84,14 @@ instance MonadPlus m => MonadPlus (Delegate r m) where
 delegate' :: (r -> ContT () m a) -> Delegate r m a
 delegate' = coerce
 
+delegate'' :: (r -> (a -> m ()) -> m ()) -> Delegate r m a
+delegate'' = delegate' . coerce
+
 runDelegate' :: Delegate r m a -> r -> ContT () m a
 runDelegate' = coerce
+
+runDelegate'' :: Delegate r m a -> r -> (a -> m ()) -> m ()
+runDelegate'' d r = runContT (runDelegate' d r)
 
 -- -- Activate left after the right, firing results from both activators.
 -- -- The binary associative function for 'nulInitializer'.
