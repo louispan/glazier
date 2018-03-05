@@ -1,27 +1,35 @@
-{-# LANGUAGE ConstraintKinds #-}
+-- {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+-- {-# LANGUAGE DeriveFunctor #-}
+-- {-# LANGUAGE FlexibleContexts #-}
+-- {-# LANGUAGE FlexibleInstances #-}
+-- {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+-- {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
+-- {-# LANGUAGE StandaloneDeriving #-}
+-- {-# LANGUAGE TypeApplications #-}
+-- {-# LANGUAGE TypeFamilies #-}
+-- {-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Core.Builder where
 
+-- import Control.Applicative
 import Control.Lens
+import Control.Monad.Trans.Reader
 import Data.Biapplicative
 import Data.Diverse.Lens
 
 ------------------------------------------------
 
--- | Make inactive model, monadic as it may need to create IORefs
-newtype MkSpec m r s = MkSpec {
-            unMkSpec :: r -> m s
-            } deriving Functor
+-- -- | Make inactive model, monadic as it may need to create IORefs
+-- newtype MkSpec r m s = MkSpec {
+--             unMkSpec :: r -> m s
+--             } deriving (Functor)
+
+-- instance Applicative m => Applicative (MkSpec r m) where
+--     pure a = MkSpec $ const $ pure a
+--     (<*>) = MkSpec
 
 ------------------------------------------------
 
@@ -36,14 +44,14 @@ newtype MkSpec m r s = MkSpec {
 
 ------------------------------------------------
 
--- | Monadic because we may need to 'Z.doReadIORef' to get the data to make the info.
-newtype MkReq m s r = MkReq {
-            unMkReq :: s -> m r
-            } deriving Functor
+-- -- | Monadic because we may need to 'Z.doReadIORef' to get the data to make the info.
+-- newtype MkReq s m r = MkReq {
+--             unMkReq :: s -> m r
+--             } deriving (Functor)
 
 ------------------------------------------------
 
-newtype MkReqOnSpec m r s = MkReqOnSpec { unMkReqOnSpec :: MkReq m s r }
+-- newtype MkReqOnSpec m r s = MkReqOnSpec { unMkReqOnSpec :: MkReq m s r }
 
 -- instance Z.ViaSpec (MkReqOnSpec m i) where
 --     type OnSpec (MkReqOnSpec m i) s = MkReq m s i
@@ -56,20 +64,18 @@ newtype MkReqOnSpec m r s = MkReqOnSpec { unMkReqOnSpec :: MkReq m s r }
 
 -- | @p' s'@ are the types the builder knows how to make
 -- @p s@ are the type the builder knows how to read
-newtype Builder m r s r' s' =
-    Builder ( MkReq m s r' -- from specifications
-            , MkSpec m r s' -- make inactive specifications
-            )
+data Builder r s m r' s' = Builder
+    { mkReq :: ReaderT s m r' -- from specifications
+    , mkSpec :: ReaderT r m s' -- make inactive specifications
+    }
 
-instance Functor m => Bifunctor (Builder m r s) where
-    bimap ij st (Builder (mkReq, mkSpc)) = Builder (ij <$> mkReq, st <$> mkSpc)
+instance Functor m => Bifunctor (Builder r s m) where
+    bimap ij st (Builder mkRq mkSpc) = Builder (ij <$> mkRq) (st <$> mkSpc)
 
-instance Applicative m => Biapplicative (Builder m r s) where
-    bipure r s = Builder (MkReq . const $ pure r, MkSpec . const $ pure s)
-    (Builder (MkReq fMkReq, MkSpec fMkMdl)) <<*>> (Builder (MkReq mkReq, MkSpec mkSpc)) =
-        Builder ( MkReq $ \r -> fMkReq r <*> mkReq r
-                , MkSpec $ \s -> fMkMdl s <*> mkSpc s
-                )
+instance Applicative m => Biapplicative (Builder r s m) where
+    bipure r s = Builder (pure r) (pure s)
+    (Builder fMkRq fMkMdl) <<*>> (Builder mkRq mkSpc) =
+        Builder (fMkRq <*> mkRq) (fMkMdl <*> mkSpc)
 
 -- ------------------------------------------------
 
@@ -91,29 +97,36 @@ instance Applicative m => Biapplicative (Builder m r s) where
 
 -- ------------------------------------------------
 
--- | THe identity for 'andBuilder'
-nulBuilder :: Applicative m => Builder m r s (Many '[]) (Many '[])
-nulBuilder = bipure nil nil
+-- -- | THe identity for 'andBuilder'
+-- nulBuilder :: Applicative m => Builder m r s (Many '[]) (Many '[])
+-- nulBuilder = bipure nil nil
 
--- | A friendlier constraint synonym for 'PBuilder' 'pmappend'.
-type AndBuilder r1 r2 r3 s1 s2 s3 =
-    ( r3 ~ Append r1 r2
-    , s3 ~ Append s1 s2
-    )
+-- -- | A friendlier constraint synonym for 'also2' for 'Builder'.
+-- type AlsoBuilder r1 r2 r3 s1 s2 s3 =
+--     ( r3 ~ Append r1 r2
+--     , s3 ~ Append s1 s2
+--     )
 
-andBuilder ::
-    (Applicative m
-    , AndBuilder r1 r2 r3 s1 s2 s3
-    ) =>
-    Builder m r s (Many r1) (Many s1)
-    -> Builder m r s (Many r2) (Many s2)
-    -> Builder m r s (Many r3) (Many s3)
-infixr 6 `andBuilder` -- like mappend
-(Builder (MkReq mkReq, MkSpec mkSpc)) `andBuilder`
-    (Builder (MkReq mkReq', MkSpec mkSpc')) =
-        Builder
-            ( MkReq $ \s -> (/./) <$> mkReq s <*> mkReq' s
-            , MkSpec $ \r -> (/./) <$> mkSpc r <*> mkSpc' r)
+-- andBuilder ::
+--     (Applicative m
+--     , AndBuilder r1 r2 r3 s1 s2 s3
+--     ) =>
+--     Builder m r s (Many r1) (Many s1)
+--     -> Builder m r s (Many r2) (Many s2)
+--     -> Builder m r s (Many r3) (Many s3)
+-- infixr 6 `andBuilder` -- like mappend
+-- (Builder (MkReq mkReq, MkSpec mkSpc)) `andBuilder`
+--     (Builder (MkReq mkReq', MkSpec mkSpc')) =
+--         Builder
+--             ( MkReq $ \s -> (/./) <$> mkReq s <*> mkReq' s
+--             , MkSpec $ \r -> (/./) <$> mkSpc r <*> mkSpc' r)
+
+-- instance (Applicative m, AlsoBuilder r1 r2 r3 s1 s2 s3) => Z.Also2 (Builder r s m)
+--     (Many r1) (Many r2) (Many r3)
+--     (Many s1) (Many s2) (Many s3) where
+--     (Builder mkReq mkSpc) `also2` (Builder mkReq' mkSpc') = Builder
+--         (liftA2 (/./) mkReq mkReq')
+--         (liftA2 (/./) mkSpc mkSpc')
 
 -- -- | A type restricted verison of const
 -- -- where the right builder is a 'nulBuilder'.
@@ -124,14 +137,24 @@ infixr 6 `andBuilder` -- like mappend
 ------------------------------------------------
 
 -- | Modify Builder's reading environment @i1@ and @s1@ inside a larger @i2@ @s2@
-enlargeBuilder ::
+enlargeB ::
     (r2 -> r1)
     -> (s2 -> s1)
-    -> Builder m r1 s1 r' s' -> Builder m r2 s2 r' s'
-enlargeBuilder fr fs (Builder (MkReq mkReq, MkSpec mkSpc)) =
-    Builder
-        ( MkReq (mkReq . fs)
-        , MkSpec (mkSpc . fr))
+    -> Builder r1 s1 m r' s'
+    -> Builder r2 s2 m r' s'
+enlargeB fr fs (Builder mkRq mkSpc) = Builder
+    (withReaderT fs mkRq)
+    (withReaderT fr mkSpc)
+
+-- | Modify Builder's reading environment @i1@ and @s1@ inside a larger @i2@ @s2@
+magnifyB :: Monad m =>
+    (Lens' r2 r1)
+    -> (Lens' s2 s1)
+    -> Builder r1 s1 m r' s'
+    -> Builder r2 s2 m r' s'
+magnifyB rl sl (Builder mkRq mkSpc) = Builder
+    (magnify sl mkRq)
+    (magnify rl mkSpc)
 
 -- -- | Return a builder that builds an item inside a Many
 -- toItemBuilder
@@ -147,11 +170,9 @@ enlargeBuilder fr fs (Builder (MkReq mkReq, MkSpec mkSpc)) =
 
 -- | Add a type @x@ into the model that is used directly from the info.
 -- @forall@ so that the type can be specified first
-build :: forall x m. (Applicative m)
-    => Builder m x x x x
-build = Builder ( MkReq pure
-                , MkSpec pure
-                )
+build :: forall x m. (Monad m)
+    => Builder x x m x x
+build = Builder ask ask
 
 -- -- | Add a type @x@ into the model that is used directly from the info
 -- -- and return a builder that uses a Many.
@@ -169,14 +190,11 @@ build = Builder ( MkReq pure
 -- buildItem = bimap single
 
 -- | Add a value @x@ into the model that is not from the info.
-hardcode :: Applicative m => x -> Builder m r s (Many '[]) x
-hardcode x = Builder
-    ( MkReq . const $ pure nil
-    , MkSpec . const $ pure x
-    )
+hardcode :: Applicative m => x -> Builder r s m (Many '[]) x
+hardcode x = Builder (pure nil) (pure x)
 
 -- | Add a value @x@ into the model that is not from the info.
-hardcodeItem :: Applicative m => x -> Builder m r s (Many '[]) (Many '[x])
+hardcodeItem :: Applicative m => x -> Builder r s m (Many '[]) (Many '[x])
 hardcodeItem = bimap id single . hardcode
 
 -- -- | Add a value @x@ into the model that is not from the info.

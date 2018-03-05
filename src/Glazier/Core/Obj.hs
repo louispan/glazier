@@ -6,33 +6,32 @@
 module Glazier.Core.Obj where
 
 import Control.Lens
-import Data.IORef
 import GHC.Generics
 
 -- | naming convention:
 --
--- foo :: Obj v s -> IO ()
--- foo this@(Z.Obj ref its) = do
+-- foo :: Obj IORef v s -> IO ()
+-- foo this@(Z.Obj ref its) = do -- or use RecordWildcards
 --     obj <- readIORef ref
 --     writeIORef ref (obj & its.bar .~ 5)
 --     doSomethingElseWith this
-data Obj v s = Obj (IORef v) (Lens' v s)
+data Obj ref v s = Obj { ref :: ref v,  its :: Lens' v s }
 
-edit :: Lens' s a -> Obj v s -> Obj v a
+edit :: Lens' s a -> Obj ref v s -> Obj ref v a
 edit l (Obj v i) = Obj v (i.l)
 
 -- Polymorphic @Lens'@ prevents a auto derivied Generic instance
 -- THe custom Generic instance uses 'ReifiedLens''
-instance Generic (Obj v s) where
+instance Generic (Obj ref v s) where
     from (Obj v s)
         = M1 (M1 (M1 (K1 v) :*: M1 (K1 (Lens s))))
     to (M1 (M1 (M1 (K1 v) :*: M1 (K1 (Lens s)))))
         = Obj v s
-    type Rep (Obj v s) = D1
+    type Rep (Obj ref v s) = D1
         ('MetaData
             "Obj"
-            "Glazier.React.Framework.Obj"
-            "glazier-react-widget"
+            "Glazier.React.Core.Obj"
+            "glazier"
             'False)
         (C1
             ('MetaCons
@@ -45,7 +44,7 @@ instance Generic (Obj v s) where
                     'NoSourceUnpackedness
                     'NoSourceStrictness
                     'DecidedLazy)
-                (Rec0 (IORef v))
+                (Rec0 (ref v))
                 :*: S1
                     ('MetaSel
                         ('Just "its")

@@ -2,8 +2,8 @@
 -- {-# LANGUAGE DataKinds #-}
 -- {-# LANGUAGE FlexibleContexts #-}
 -- {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+-- {-# LANGUAGE RankNTypes #-}
+-- {-# LANGUAGE ScopedTypeVariables #-}
 -- {-# LANGUAGE TypeApplications #-}
 -- {-# LANGUAGE TypeFamilies #-}
 
@@ -17,7 +17,7 @@ import qualified Glazier.Core.Delegate as Z
 import qualified Glazier.Core.Obj as Z
 
 type Initializer s m c = Z.Delegate s m c
-type ObjInitializer v s m c = Initializer (Z.Obj v s) m c
+type ObjInitializer ref v s m c = Initializer (Z.Obj ref v s) m c
 
 -- -- mempty
 -- memptyInitializer :: Applicative m => Initializer s m c

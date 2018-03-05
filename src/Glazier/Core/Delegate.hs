@@ -19,10 +19,8 @@ import Control.Monad.Trans.Cont.Extras as TE
 import Control.Monad.Zip
 import Control.Newtype
 import Data.Coerce
-import Data.Diverse.Profunctor
 import Data.Semigroup
 import qualified GHC.Generics as G
-import qualified Glazier.Core.Also as Z
 
 -- | A 'Delegate' is like a 'Glazier.Core.Method' (a reader with an associated object)
 -- but where some work is delegated to a handler (the ContT continuation).
@@ -59,7 +57,7 @@ instance Zoom (ContT () m) (ContT () n) s t => Zoom (Delegate e m) (Delegate e n
 -- | This is the reason for the newtye wrapper
 -- This is different from the Alternative/MonadPlus instance.
 -- The Alternative/MonadPlus instance runs one or the other
--- The Semigroup/Monoid instances runs both.
+-- The Semigroup/Monoid instances runs both, and fires the output twice.
 instance (Applicative m) => Semigroup (Delegate r m c) where
     Delegate (ReaderT x) <> Delegate (ReaderT y) =
         Delegate . ReaderT $ liftA2 (TE.alsoContT) x y
@@ -67,7 +65,7 @@ instance (Applicative m) => Semigroup (Delegate r m c) where
 -- | This is the reason for the newtye wrapper
 -- This is different from the Alternative/MonadPlus instance.
 -- The Alternative/MonadPlus instance runs one or the other
--- The Semigroup/Monoid instances runs both.
+-- The Semigroup/Monoid instances runs both, and fires the output twice.
 instance (Applicative m) => Monoid (Delegate r m c) where
     mempty = Delegate . ReaderT . const . ContT . const $ pure ()
     mappend = (<>)
@@ -89,10 +87,10 @@ delegate' = coerce
 runDelegate' :: Delegate r m a -> r -> ContT () m a
 runDelegate' = coerce
 
--- Activate left after the right, firing results from both activators.
--- The binary associative function for 'nulInitializer'.
-instance
-    ( Applicative m
-    , ChooseBoth c1 c2 c3
-    ) => Z.Also (Delegate r m) (Which c1) (Which c2) (Which c3) where
-    x `also` y = (diversify <$> x) <> (diversify <$> y)
+-- -- Activate left after the right, firing results from both activators.
+-- -- The binary associative function for 'nulInitializer'.
+-- instance
+--     ( Applicative m
+--     , ChooseBoth c1 c2 c3
+--     ) => Z.Also (Delegate r m) (Which c1) (Which c2) (Which c3) where
+--     x `also` y = (diversify <$> x) <> (diversify <$> y)
