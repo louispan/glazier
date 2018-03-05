@@ -15,7 +15,6 @@ import Control.Monad.Cont
 import Control.Monad.Fail
 import Control.Monad.Reader
 import Control.Monad.State.Class
-import Control.Monad.Trans.Cont.Extras as TE
 import Control.Monad.Zip
 import Control.Newtype
 import Data.Coerce
@@ -60,7 +59,9 @@ instance Zoom (ContT () m) (ContT () n) s t => Zoom (Delegate e m) (Delegate e n
 -- The Semigroup/Monoid instances runs both, and fires the output twice.
 instance (Applicative m) => Semigroup (Delegate r m c) where
     Delegate (ReaderT x) <> Delegate (ReaderT y) =
-        Delegate . ReaderT $ liftA2 (TE.alsoContT) x y
+        Delegate . ReaderT $ liftA2 mergeContT x y
+      where
+        mergeContT (ContT f) (ContT g) = ContT $ \k -> f k *> g k
 
 -- | This is the reason for the newtye wrapper
 -- This is different from the Alternative/MonadPlus instance.
