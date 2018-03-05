@@ -17,6 +17,8 @@ import GHC.Generics
 --     doSomethingElseWith this
 data Obj ref v s = Obj { ref :: ref v,  its :: Lens' v s }
 
+-- | Tip: This can be used to 'magnify' 'MonadReader' with
+-- @magnify ('to' ('edit' theLens)) theReader@
 edit :: Lens' s a -> Obj ref v s -> Obj ref v a
 edit l (Obj v i) = Obj v (i.l)
 

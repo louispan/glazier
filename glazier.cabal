@@ -18,11 +18,8 @@ library
   exposed-modules:     Glazier.Core
                        Glazier.Core.Builder
                        Glazier.Core.Delegate
-                       Glazier.Core.Finalizer
-                       Glazier.Core.Handler
                        Glazier.Core.Meld
                        Glazier.Core.Method
-                       Glazier.Core.Initializer
                        Glazier.Core.Obj
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 0.1.3.0

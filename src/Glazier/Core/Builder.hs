@@ -189,11 +189,11 @@ build = Builder ask ask
 --     => Builder m r s (Many '[x]) (Many '[x])
 -- buildItem = bimap single
 
--- | Add a value @x@ into the model that is not from the info.
+-- | Add a value @x@ into the model that is not from the requirements.
 hardcode :: Applicative m => x -> Builder r s m (Many '[]) x
 hardcode x = Builder (pure nil) (pure x)
 
--- | Add a value @x@ into the model that is not from the info.
+-- | Add a value @x@ into the model that is not from the requirements.
 hardcodeItem :: Applicative m => x -> Builder r s m (Many '[]) (Many '[x])
 hardcodeItem = bimap id single . hardcode
 
