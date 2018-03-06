@@ -20,9 +20,9 @@ data Obj ref parent a = Obj { self :: ref parent, my :: Lens' parent a }
 access :: Lens' s a -> Obj ref p s -> Obj ref p a
 access l (Obj t s) = Obj t (s.l)
 
-accessor :: Lens' s a -> Lens' (Obj ref p s) (Obj ref p a)
-accessor l = lens (\(Obj p s) -> Obj p (s.l))
-    (\(Obj _ s) (Obj p _) -> Obj p s)
+-- accessor :: Lens' s a -> Lens' (Obj ref p s) (Obj ref p a)
+-- accessor l = lens (\(Obj p s) -> Obj p (s.l))
+--     (\(Obj _ s) (Obj p _) -> Obj p s)
 
 -- Polymorphic @Lens'@ prevents a auto derivied Generic instance
 -- THe custom Generic instance uses 'ReifiedLens''
