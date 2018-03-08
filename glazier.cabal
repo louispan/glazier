@@ -17,15 +17,14 @@ library
   hs-source-dirs:      src
   exposed-modules:     Glazier.Core
                        Glazier.Core.Builder
-                       Glazier.Core.Delegate
                        Glazier.Core.Meld
                        Glazier.Core.Method
                        Glazier.Core.Obj
   build-depends:       base >= 4.7 && < 5
+                     , alternators >= 0.2.0.0
                      , bifunctors >= 5.4.1
                      , data-diverse-lens >= 2.2.0.0
                      , esoteric-extras >= 0.0.1.0
-                     , generic-lens >= 0.5.1.0
                      , lens >= 4
                      , mmorph >= 1
                      , mtl >= 2

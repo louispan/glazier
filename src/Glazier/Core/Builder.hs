@@ -14,9 +14,8 @@
 
 module Glazier.Core.Builder where
 
--- import Control.Applicative
+import Control.Applicative
 import Control.Lens
-import Control.Monad.Trans.Reader
 import Data.Biapplicative
 import Data.Diverse.Lens
 
@@ -65,17 +64,17 @@ import Data.Diverse.Lens
 -- | @p' s'@ are the types the builder knows how to make
 -- @p s@ are the type the builder knows how to read
 data Builder r s m r' s' = Builder
-    { mkReq :: ReaderT s m r' -- from specifications
-    , mkSpec :: ReaderT r m s' -- make inactive specifications
+    { mkReq :: s -> m r' -- from specifications
+    , mkSpec :: r -> m s' -- make inactive specifications
     }
 
 instance Functor m => Bifunctor (Builder r s m) where
-    bimap ij st (Builder mkRq mkSpc) = Builder (ij <$> mkRq) (st <$> mkSpc)
+    bimap ij st (Builder mkRq mkSpc) = Builder (fmap ij <$> mkRq) (fmap st <$> mkSpc)
 
 instance Applicative m => Biapplicative (Builder r s m) where
-    bipure r s = Builder (pure r) (pure s)
+    bipure r s = Builder (pure $ pure r) (pure $ pure s)
     (Builder fMkRq fMkMdl) <<*>> (Builder mkRq mkSpc) =
-        Builder (fMkRq <*> mkRq) (fMkMdl <*> mkSpc)
+        Builder (liftA2 (<*>) fMkRq mkRq) (liftA2 (<*>) fMkMdl mkSpc)
 
 -- ------------------------------------------------
 
@@ -143,11 +142,11 @@ enlargeB ::
     -> Builder r1 s1 m r' s'
     -> Builder r2 s2 m r' s'
 enlargeB fr fs (Builder mkRq mkSpc) = Builder
-    (withReaderT fs mkRq)
-    (withReaderT fr mkSpc)
+    (mkRq . fs)
+    (mkSpc . fr)
 
 -- | Modify Builder's reading environment @i1@ and @s1@ inside a larger @i2@ @s2@
-magnifyB :: Monad m =>
+magnifyB ::
     (Lens' r2 r1)
     -> (Lens' s2 s1)
     -> Builder r1 s1 m r' s'
@@ -172,7 +171,7 @@ magnifyB rl sl (Builder mkRq mkSpc) = Builder
 -- @forall@ so that the type can be specified first
 build :: forall x m. (Monad m)
     => Builder x x m x x
-build = Builder ask ask
+build = Builder pure pure
 
 -- -- | Add a type @x@ into the model that is used directly from the info
 -- -- and return a builder that uses a Many.
@@ -191,7 +190,7 @@ build = Builder ask ask
 
 -- | Add a value @x@ into the model that is not from the requirements.
 hardcode :: Applicative m => x -> Builder r s m (Many '[]) x
-hardcode x = Builder (pure nil) (pure x)
+hardcode x = Builder (const $ pure nil) (const $ pure x)
 
 -- | Add a value @x@ into the model that is not from the requirements.
 hardcodeItem :: Applicative m => x -> Builder r s m (Many '[]) (Many '[x])
