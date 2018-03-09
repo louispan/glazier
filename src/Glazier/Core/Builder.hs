@@ -1,16 +1,9 @@
--- {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
--- {-# LANGUAGE DeriveFunctor #-}
--- {-# LANGUAGE FlexibleContexts #-}
--- {-# LANGUAGE FlexibleInstances #-}
--- {-# LANGUAGE GeneralizedNewtypeDeriving #-}
--- {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
--- {-# LANGUAGE StandaloneDeriving #-}
--- {-# LANGUAGE TypeApplications #-}
--- {-# LANGUAGE TypeFamilies #-}
--- {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Glazier.Core.Builder where
 
