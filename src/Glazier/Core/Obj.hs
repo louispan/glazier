@@ -9,15 +9,15 @@ import Control.Lens
 import GHC.Generics
 
 -- | naming convention:
--- foo this@(Z.Obj self my) = do -- or use RecordWildcards
+-- foo this@(Obj self my) = do -- or use RecordWildcards
 --     me <- readIORef self
 --     writeIORef ref (me & my.bar .~ 5)
 --     doSomethingElseWith this
-data Obj ref parent a = Obj { self :: ref parent, my :: Lens' parent a }
+data Obj ref parent a = Obj { self :: ref parent, my :: Traversal' parent a }
 
 -- | Tip: This can be used to 'magnify' 'MonadReader' with
 -- @magnify ('to' ('access' theLens)) theReader@
-access :: Lens' s a -> Obj ref p s -> Obj ref p a
+access :: Traversal' s a -> Obj ref p s -> Obj ref p a
 access l (Obj t s) = Obj t (s.l)
 
 -- accessor :: Lens' s a -> Lens' (Obj ref p s) (Obj ref p a)
@@ -28,13 +28,13 @@ access l (Obj t s) = Obj t (s.l)
 -- THe custom Generic instance uses 'ReifiedLens''
 instance Generic (Obj ref p a) where
     from (Obj p a)
-        = M1 (M1 (M1 (K1 p) :*: M1 (K1 (Lens a))))
-    to (M1 (M1 (M1 (K1 p) :*: M1 (K1 (Lens a)))))
+        = M1 (M1 (M1 (K1 p) :*: M1 (K1 (Traversal a))))
+    to (M1 (M1 (M1 (K1 p) :*: M1 (K1 (Traversal a)))))
         = Obj p a
     type Rep (Obj ref p a) = D1
         ('MetaData
             "Obj"
-            "Glazier.React.Core.Obj"
+            "Glazier.Core.Obj"
             "glazier"
             'False)
         (C1
@@ -55,5 +55,5 @@ instance Generic (Obj ref p a) where
                         'NoSourceUnpackedness
                         'NoSourceStrictness
                         'DecidedLazy)
-                    (Rec0 (ReifiedLens' p a))))
+                    (Rec0 (ReifiedTraversal' p a))))
 
