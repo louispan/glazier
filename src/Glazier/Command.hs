@@ -14,6 +14,7 @@ module Glazier.Command
     ( Commands
     , HasCommands(..)
     , Cmd(..)
+    , dispatch
     , stamp
     , stamp'
     , post
@@ -64,6 +65,12 @@ instance Show (Cmd f cmd) where
     showsPrec p (Cmd_ f) = showParen (p >= 11) $
         showString "Cmd_ " . shows f
 
+-- | Add a command to the list of commands for this state tick.
+-- I basically want a Writer monad, but I'm using a State monad
+-- because but I also want to use it inside a ContT which only has an instance of MonadState.
+dispatch :: (MonadState s m, HasCommands s cmd) => cmd -> m ()
+dispatch c = _commands %= (`DL.snoc` c)
+
 -- | convert a request type to a command type.
 -- This is used for commands that doesn't have a continuation.
 -- Ie. commands that doesn't "returns" a value from running an effect.
@@ -81,18 +88,18 @@ stamp' = review facet
 -- | Add a command to the list of commands for this state tick.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
-post :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
-post c = _commands %= (`DL.snoc` (stamp c))
+post :: (MonadState s m, HasCommands s cmd, AsFacet c cmd) => c -> m ()
+post = dispatch . stamp
 
 -- | Add a higher kinded command to the list of commands for this state tick.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
-post' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
-post' c = _commands %= (`DL.snoc` (stamp' c))
+post' :: (MonadState s m, HasCommands s cmd, AsFacet (c cmd) cmd) => c cmd -> m ()
+post' = dispatch . stamp'
 
 -- | Adds the ContT monad's commands into the 'MonadState' of commands.
 -- 'inquire' is used to start usages of 'conclude'.
-inquire :: MonadState (DL.DList cmd) m => ContT () (State (DL.DList cmd)) () -> m ()
+inquire :: (MonadState s m, HasCommands s cmd) => ContT () (State (DL.DList cmd)) () -> m ()
 inquire = (\s -> _commands %= (<> execState s mempty)) . evalContT
 
 -- | This converts a command that requires a handler into a ContT monad so that the do notation
