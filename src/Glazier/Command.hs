@@ -18,9 +18,9 @@ module Glazier.Command
     , Cmd(..)
     , command
     , command'
-    , dictate
-    , mandate
-    , mandate'
+    , post
+    , postcmd
+    , postcmd'
     , codify
     , inquire
     , conclude
@@ -73,11 +73,6 @@ instance Show (Cmd f cmd) where
     showsPrec p (Cmd_ f) = showParen (p >= 11) $
         showString "Cmd_ " . shows f
 
--- codify
--- mandate
--- dictate
--- command
-
 -- | convert a request type to a command type.
 -- This is used for commands that doesn't have a continuation.
 -- Ie. commands that doesn't "returns" a value from running an effect.
@@ -95,16 +90,16 @@ command' = review facet
 -- | Add a command to the list of commands for this state tick.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
-dictate :: (MonadState s m, HasCommands' s cmd) => cmd -> m ()
-dictate c = _commands' %= (`DL.snoc` c)
+post :: (MonadState s m, HasCommands' s cmd) => cmd -> m ()
+post c = _commands' %= (`DL.snoc` c)
 
--- | @'mandate' = 'dictate' . 'command'@
-mandate :: (MonadState s m, HasCommands' s cmd, AsFacet c cmd) => c -> m ()
-mandate = dictate . command
+-- | @'postcmd' = 'post' . 'command'@
+postcmd :: (MonadState s m, HasCommands' s cmd, AsFacet c cmd) => c -> m ()
+postcmd = post . command
 
--- | @'mandate'' = 'dictate' . 'command''@
-mandate' :: (MonadState s m, HasCommands' s cmd, AsFacet (c cmd) cmd) => c cmd -> m ()
-mandate' = dictate . command'
+-- | @'postcmd'' = 'post' . 'command''@
+postcmd' :: (MonadState s m, HasCommands' s cmd, AsFacet (c cmd) cmd) => c cmd -> m ()
+postcmd' = post . command'
 
 -- | Converts a State list of commands to a single command
 codify :: AsFacet [cmd] cmd => State (DL.DList cmd) () -> cmd
@@ -119,7 +114,7 @@ inquire = (\s -> _commands' %= (<> execState s mempty)) . evalContT
 -- can be used to compose the handler for that command.
 -- 'conclude' is used inside an 'inquire' block.
 conclude :: (AsFacet (c cmd) cmd, AsFacet [cmd] cmd) => ((a -> cmd) -> c cmd) -> ContT () (State (DL.DList cmd)) a
-conclude m = ContT $ \k -> mandate' $ m (codify . k)
+conclude m = ContT $ \k -> postcmd' $ m (codify . k)
 
 ----------------------------------------------
 -- Batch independant commands
@@ -154,7 +149,7 @@ concurringly :: Concur cmd a -> (a -> cmd) -> ConcurCmd cmd
 concurringly = Cmd
 
 -- | Allows usages  of 'concur' inside a 'concurring' block.
--- This results in a command that doesn't require a handler and may be 'mandate''ed.
+-- This results in a command that doesn't require a handler and may be 'postcmd''ed.
 concurringly_ :: Concur cmd () -> ConcurCmd cmd
 concurringly_ = Cmd_
 
@@ -174,7 +169,7 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
         v <- lift $ MkMVar newEmptyMVar
-        mandate' $ concurringly (Concur $ pure m')
+        postcmd' $ concurringly (Concur $ pure m')
             (\a -> command' $ concurringly (k a)
                 (\b -> command' $ concurringly_ (Concur $ pure $ putMVar v b)))
         pure $ takeMVar v
@@ -186,5 +181,5 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
 concur :: (AsConcur cmd, AsFacet (c cmd) cmd) => ((a -> cmd) -> c cmd) -> Concur cmd a
 concur k = Concur $ do
     v <- lift $ MkMVar newEmptyMVar
-    mandate' $ k (\a -> command' $ concurringly_ (Concur $ pure $ putMVar v a))
+    postcmd' $ k (\a -> command' $ concurringly_ (Concur $ pure $ putMVar v a))
     pure $ takeMVar v
