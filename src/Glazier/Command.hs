@@ -119,7 +119,7 @@ inquire = (\s -> _commands' %= (<> execState s mempty)) . evalContT
 -- can be used to compose the handler for that command.
 -- 'conclude' is used inside an 'inquire' block.
 conclude :: (AsFacet (c cmd) cmd, AsFacet [cmd] cmd) => ((a -> cmd) -> c cmd) -> ContT () (State (DL.DList cmd)) a
-conclude m = ContT $ \k -> mandate' $ m (command' @[] . DL.toList . (`execState` mempty) . k)
+conclude m = ContT $ \k -> mandate' $ m (codify . k)
 
 ----------------------------------------------
 -- Batch independant commands
