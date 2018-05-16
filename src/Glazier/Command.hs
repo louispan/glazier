@@ -164,13 +164,16 @@ type ConcurCmd cmd = Cmd (Concur cmd) cmd
 -- for composing commands that can be run concurrently.
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
-newtype Concur c a = Concur
+newtype Concur cmd a = Concur
     -- The base IO doesn't block (only does newEmptyMVar), but the returns an IO that blocks.
-    { runConcur :: Strict.StateT (DL.DList c) MkMVar (IO a)
+    { runConcur :: Strict.StateT (DL.DList cmd) MkMVar (IO a)
     }
 
-instance Show (Concur c a) where
+instance Show (Concur cmd a) where
     showsPrec _ _ = showString "Concur"
+
+instance AsConcur cmd => Codify (Concur cmd) cmd where
+    codify f = pure $ command' . Cmd_ . f
 
 -- | NB. Don't export MkMVar constructor to guarantee
 -- that that it only contains non-blocking 'newEmptyMVar' IO.
@@ -180,12 +183,12 @@ newtype MkMVar a = MkMVar (IO a)
 unMkMVar :: MkMVar a -> IO a
 unMkMVar (MkMVar m) = m
 
--- | Allows usages  of 'concur' inside a 'concurringly' block.
+-- | Allows usages  of 'conclude' inside a 'concurringly' block.
 -- This resuls in a command that requires a handler, which may be used by 'conclude'
 concurringly :: Concur cmd a -> (a -> cmd) -> ConcurCmd cmd
 concurringly = Cmd
 
--- | Allows usages  of 'concur' inside a 'concurring' block.
+-- | Allows usages  of 'conclude' inside a 'concurring' block.
 -- This results in a command that doesn't require a handler and may be 'postcmd''ed.
 concurringly_ :: Concur cmd () -> ConcurCmd cmd
 concurringly_ = Cmd_
@@ -211,12 +214,13 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
                 (\b -> command' $ concurringly_ (Concur $ pure $ putMVar v b)))
         pure $ takeMVar v
 
--- | Concurrent version of 'conclude'. Converts a command that requires a handler to a Concur monad
+-- | This instance makes usages of 'conclude' concurrent when used
+-- insdie a 'concurringly' or 'concurringly_' block.
+-- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
--- The Concur monad allows schedule the command in concurrently with other 'concur'red commands.
--- 'concur' is used inside an 'concurringly' or 'concurringly_' block.
-concur :: (AsConcur cmd, AsFacet (c cmd) cmd) => ((a -> cmd) -> c cmd) -> Concur cmd a
-concur k = Concur $ do
-    v <- lift $ MkMVar newEmptyMVar
-    postcmd' $ k (\a -> command' $ concurringly_ (Concur $ pure $ putMVar v a))
-    pure $ takeMVar v
+-- The Concur monad allows scheduling the command in concurrently with other commands.
+instance AsConcur cmd => MonadDefer () (Concur cmd) where
+    defer f = Concur $ do
+        v <- lift $ MkMVar newEmptyMVar
+        postcmd' $ Cmd_ $ f (\a -> Concur $ pure $ putMVar v a)
+        pure $ takeMVar v
