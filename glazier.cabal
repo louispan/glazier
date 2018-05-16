@@ -32,6 +32,25 @@ library
   ghc-options:        -Wall
   default-language:    Haskell2010
 
+test-suite glazier-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base >= 4.7 && < 5
+                     , glazier
+                     , data-diverse >= 3.1
+                     , data-diverse-lens >= 3.1.1
+                     , lens >= 4.14
+                     , mtl >= 2.2
+                     , dlist >= 0.8
+                     , transformers >= 0.3
+                     , unliftio >= 0.2.7.0
+                     , unliftio-core >= 0.1.1.0
+                     , stm >= 2.4
+                     , tagged >= 0.8
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall
+  default-language:    Haskell2010
+
 source-repository head
   type:     git
   location: https://github.com/louispan/glazier

@@ -10,57 +10,50 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Glazier.Command
-    ( Commands
-    , HasCommands(..)
-    , HasCommands'
-    , _commands'
-    , Cmd(..)
-    , command
-    , command'
-    , post
-    , postcmd
-    , postcmd'
-    , codify
-    , inquire
-    , conclude
-    , concurringly
-    , concurringly_
-    , concur
-    , AsConcur
-    , ConcurCmd
-    , Concur(..)
-    , MkMVar -- Hiding constructor
-    , unMkMVar
-    ) where
+module Glazier.Command where
+    -- ( Commands
+    -- , HasCommands(..)
+    -- , HasCommands'
+    -- , _commands'
+    -- , Cmd(..)
+    -- , Codify(..)
+    -- , MonadCommand
+    -- , command
+    -- , command'
+    -- , post
+    -- , postcmd
+    -- , postcmd'
+    -- -- , inquire
+    -- , conclude
+    -- , concurringly
+    -- , concurringly_
+    -- , concur
+    -- , AsConcur
+    -- , ConcurCmd
+    -- , Concur(..)
+    -- , MkMVar -- Hiding constructor
+    -- , unMkMVar
+    -- ) where
 
 
 import Control.Applicative
 import Control.Concurrent
 import Control.Lens
-import Control.Monad.Cont
-import Control.Monad.Delegate
-import Control.Monad.State.Strict
+import Control.Monad.Defer
+import Control.Monad.Reader
+import Control.Monad.State
+import Control.Monad.Trans.AReader
+import Control.Monad.Trans.AState.Lazy as Lazy
+import Control.Monad.Trans.AState.Strict as Strict
+import Control.Monad.Trans.Identity
+import Control.Monad.Trans.State.Lazy as Lazy
+import Control.Monad.Trans.State.Strict as Strict
 import Data.Diverse.Lens
 import qualified Data.DList as DL
-import Data.Semigroup
 
 ----------------------------------------------
 -- Command utilties
 ----------------------------------------------
-
-type Commands cmd = DL.DList cmd
-
-class HasCommands c c' cmd cmd' | c -> cmd, c' -> cmd' where
-    _commands :: Lens c c' (Commands cmd) (Commands cmd')
-
-type HasCommands' c cmd = HasCommands c c cmd cmd
-
-_commands' :: HasCommands' c cmd => Lens' c (Commands cmd)
-_commands' = _commands
-
-instance HasCommands (DL.DList cmd) (DL.DList cmd') cmd cmd' where
-    _commands = id
 
 -- | Adds a handler to polymorphic commands that produce a value
 data Cmd f cmd where
@@ -72,6 +65,52 @@ instance Show (Cmd f cmd) where
         showString "Cmd " . shows f
     showsPrec p (Cmd_ f) = showParen (p >= 11) $
         showString "Cmd_ " . shows f
+
+-- | Converts a monad transformer stack with a 'State' of list of commands
+-- to output a single command, using the current monad context.
+class Codify m cmd | m -> cmd where
+    codify :: (a -> m ()) -> m (a -> cmd)
+
+instance AsFacet [cmd] cmd => Codify (Strict.State (DL.DList cmd)) cmd where
+    codify f = pure $ \a -> case DL.toList . (`Strict.execState` mempty) $ f a of
+        [x] -> x
+        xs -> command' xs
+
+instance AsFacet [cmd] cmd => Codify (Strict.AState (DL.DList cmd)) cmd where
+    codify f = pure $ \a -> case DL.toList . (`Strict.execAState` mempty) $ f a of
+        [x] -> x
+        xs -> command' xs
+
+instance AsFacet [cmd] cmd => Codify (Lazy.State (DL.DList cmd)) cmd where
+    codify f = pure $ \a -> case DL.toList . (`Lazy.execState` mempty) $ f a of
+        [x] -> x
+        xs -> command' xs
+
+instance AsFacet [cmd] cmd => Codify (Lazy.AState (DL.DList cmd)) cmd where
+    codify f = pure $ \a -> case DL.toList . (`Lazy.execAState` mempty) $ f a of
+        [x] -> x
+        xs -> command' xs
+
+instance (Codify m cmd, Monad m) => Codify (IdentityT m) cmd where
+    codify f = lift . codify $ runIdentityT . f
+
+instance (Codify m cmd, Monad m) => Codify (ContT () m) cmd where
+    codify f = lift . codify $ evalContT . f
+
+instance (Codify m cmd, Monad m) => Codify (AContT () m) cmd where
+    codify f = lift . codify $ evalAContT . f
+
+instance (Codify m cmd, Monad m) => Codify (ReaderT r m) cmd where
+    codify f = do
+        r <- ask
+        lift . codify $ (`runReaderT` r) . f
+
+instance (Codify m cmd, Monad m) => Codify (AReaderT r m) cmd where
+    codify f = do
+        r <- ask
+        lift . codify $ (`runAReaderT` r) . f
+
+type MonadCommand m cmd = (MonadState (DL.DList cmd) m, Codify m cmd)
 
 -- | convert a request type to a command type.
 -- This is used for commands that doesn't have a continuation.
@@ -90,31 +129,29 @@ command' = review facet
 -- | Add a command to the list of commands for this state tick.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
-post :: (MonadState s m, HasCommands' s cmd) => cmd -> m ()
-post c = _commands' %= (`DL.snoc` c)
+post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
+post c = id %= (`DL.snoc` c)
 
 -- | @'postcmd' = 'post' . 'command'@
-postcmd :: (MonadState s m, HasCommands' s cmd, AsFacet c cmd) => c -> m ()
+postcmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
 postcmd = post . command
 
 -- | @'postcmd'' = 'post' . 'command''@
-postcmd' :: (MonadState s m, HasCommands' s cmd, AsFacet (c cmd) cmd) => c cmd -> m ()
+postcmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
 postcmd' = post . command'
-
--- | Converts a State list of commands to a single command
-codify :: AsFacet [cmd] cmd => State (DL.DList cmd) () -> cmd
-codify = command' @[] . DL.toList . (`execState` mempty)
-
--- | Adds the ContT monad's commands into the 'MonadState' of commands.
--- 'inquire' is used to start usages of 'conclude'.
-inquire :: (MonadState s m, HasCommands' s cmd) => ContT () (State (DL.DList cmd)) () -> m ()
-inquire = (\s -> _commands' %= (<> execState s mempty)) . evalContT
 
 -- | This converts a command that requires a handler into a ContT monad so that the do notation
 -- can be used to compose the handler for that command.
--- 'conclude' is used inside an 'inquire' block.
-conclude :: (AsFacet (c cmd) cmd, AsFacet [cmd] cmd) => ((a -> cmd) -> c cmd) -> ContT () (State (DL.DList cmd)) a
-conclude m = ContT $ \k -> postcmd' $ m (codify . k)
+-- 'conclude' is used inside an 'evalContT' block.
+conclude :: (MonadDefer () m, MonadCommand m cmd, AsFacet (c cmd) cmd)
+    => ((a -> cmd) -> c cmd) -> m a
+conclude m = concludeM (postcmd' . m)
+
+concludeM :: (MonadDefer () m, MonadCommand m cmd)
+    => ((a -> cmd) -> m ()) -> m a
+concludeM m = defer $ \k -> do
+    f <- codify k
+    m f
 
 ----------------------------------------------
 -- Batch independant commands
@@ -129,7 +166,7 @@ type ConcurCmd cmd = Cmd (Concur cmd) cmd
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
 newtype Concur c a = Concur
     -- The base IO doesn't block (only does newEmptyMVar), but the returns an IO that blocks.
-    { runConcur :: StateT (DL.DList c) MkMVar (IO a)
+    { runConcur :: Strict.StateT (DL.DList c) MkMVar (IO a)
     }
 
 instance Show (Concur c a) where
@@ -154,7 +191,7 @@ concurringly_ :: Concur cmd () -> ConcurCmd cmd
 concurringly_ = Cmd_
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
-    state m = Concur $ pure <$> state m
+    state m = Concur $ pure <$> Strict.state m
 
 instance Functor (Concur cmd) where
     fmap f (Concur m) = Concur $ fmap f <$> m
