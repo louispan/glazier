@@ -209,7 +209,7 @@ testEffects = void . runMaybeT . testEffects_ testEffects
 -- programs
 ----------------------------------------------
 
-ioProgram :: (AsFacet (IOEffect cmd) cmd, MonadCommand m cmd) => m ()
+ioProgram :: (AsFacet (IOEffect cmd) cmd, AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 ioProgram = do
     postcmd' $ PutStrLn "Write two things"
     evalContT $ do
@@ -228,35 +228,33 @@ ioProgram = do
 -- | using only concur
 ioProgramWithOnlyConcur ::
     ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd
-    , MonadCommand m cmd) => m ()
+    , AsConcur cmd) => State (DL.DList cmd) ()
 ioProgramWithOnlyConcur = do
     postcmd' $ PutStrLn "Write two things"
     postcmd' $ concurringly_ $ do
         -- Use the Concur monad to batch two GetLines concurrently
-        a1 <- conclude GetLine
-        a2 <- conclude GetLine
+        a1 <- concur GetLine
+        a2 <- concur GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> postcmd' $ PutStrLn "Easter egg!"
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- conclude GetLine
+                b <- concur GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using concur & cont together
 ioProgramWithConcur ::
     ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd
-    , MonadCommand m cmd) => m ()
+    , AsConcur cmd, AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 ioProgramWithConcur = do
     postcmd' $ PutStrLn "Write two things"
     evalContT $ do
         (a1, a2) <- conclude . concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
-                a1 <- conclude GetLine
-                a2 <- conclude GetLine
+                a1 <- concur GetLine
+                a2 <- concur2 GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of
@@ -271,8 +269,7 @@ ioProgramWithConcur = do
 program ::
     ( AsFacet HelloWorldEffect cmd
     , AsFacet (IOEffect cmd) cmd
-    , MonadCommand m cmd
-    ) => m ()
+    , AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 program = do
     postcmd HelloWorld
     ioProgram
@@ -283,6 +280,7 @@ main = do
     -- reduce the program to the list of commands
     let cs :: [AppCmd]
         cs =  DL.toList $ (`execState` mempty) ioProgramWithConcur
+        -- cs =  DL.toList $ (`execState` mempty) ioProgramWithOnlyConcur
 
     -- interpret the program commands with preconfigured inputs
     is <- newTVarIO ["secret", "y", "z"]

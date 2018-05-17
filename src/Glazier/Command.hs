@@ -1,3 +1,6 @@
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
+
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -39,7 +42,8 @@ module Glazier.Command where
 import Control.Applicative
 import Control.Concurrent
 import Control.Lens
-import Control.Monad.Defer
+import Control.Monad.Cont
+import Control.Monad.Delegate
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Trans.AReader
@@ -70,11 +74,20 @@ instance Show (Cmd f cmd) where
 -- to output a single command, using the current monad context.
 class Codify m cmd | m -> cmd where
     codify :: (a -> m ()) -> m (a -> cmd)
+    -- codify2 :: m a -> (a -> cmd) -> m cmd
 
+-- codify1 :: (Functor m, Codify m cmd) => m () -> m cmd
+-- codify1 m = (\f -> f ()) <$> codify (const m)
+
+-- | Convert a State into a single command, but running it with mempty like Writer.
 instance AsFacet [cmd] cmd => Codify (Strict.State (DL.DList cmd)) cmd where
     codify f = pure $ \a -> case DL.toList . (`Strict.execState` mempty) $ f a of
         [x] -> x
         xs -> command' xs
+
+    -- codify2 m f = do
+    --     let (a, s) = (`Strict.runState` mempty) m
+    --     in pure $ command' @[] $ DL.toList $ s `DL.snoc` f a
 
 instance AsFacet [cmd] cmd => Codify (Strict.AState (DL.DList cmd)) cmd where
     codify f = pure $ \a -> case DL.toList . (`Strict.execAState` mempty) $ f a of
@@ -132,6 +145,9 @@ command' = review facet
 post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
 post c = id %= (`DL.snoc` c)
 
+-- posts :: (MonadState (DL.DList cmd) m) => DL.DList cmd -> m ()
+-- posts cs = id %= (<> cs)
+
 -- | @'postcmd' = 'post' . 'command'@
 postcmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
 postcmd = post . command
@@ -142,16 +158,36 @@ postcmd' = post . command'
 
 -- | This converts a command that requires a handler into a ContT monad so that the do notation
 -- can be used to compose the handler for that command.
--- 'conclude' is used inside an 'evalContT' block.
-conclude :: (MonadDefer () m, MonadCommand m cmd, AsFacet (c cmd) cmd)
+-- Unlike 'concur', 'conclude' is only used inside an 'evalContT' block.
+-- The 'MonadCont' constraint is redundant but rules out
+-- using 'Concur' at the bottom of the transformer stack.
+-- 'conclude' is used for operations that MUST run sequentially,
+-- not concurrently.
+conclude ::
+    ( MonadDelegate () m
+    , MonadState (DL.DList cmd) m
+    , Codify m cmd
+    , AsFacet (c cmd) cmd
+    , MonadCont m
+    )
     => ((a -> cmd) -> c cmd) -> m a
-conclude m = concludeM (postcmd' . m)
+conclude = concur2
 
-concludeM :: (MonadDefer () m, MonadCommand m cmd)
+concludeM ::
+    ( MonadDelegate () m
+    , Codify m cmd
+    , MonadCont m
+    )
     => ((a -> cmd) -> m ()) -> m a
-concludeM m = defer $ \k -> do
-    f <- codify k
-    m f
+concludeM = concurM
+
+-- inquire :: (MonadState s m) => t (ContT () (State (DL.DList cmd))) () -> t Identity ()
+-- inquire = undefined
+
+-- conclude :: (AsFacet (c cmd) cmd, AsFacet [cmd] cmd) => ((a -> cmd) -> c cmd`) -> ContT () (Strict.State (DL.DList cmd)) a
+-- conclude m = ContT $ \k -> postcmd' $ m (codifybak . k)
+-- codifybak :: AsFacet [cmd] cmd => Strict.State (DL.DList cmd) () -> cmd
+-- codifybak = command' @[] . DL.toList . (`Strict.execState` mempty)
 
 ----------------------------------------------
 -- Batch independant commands
@@ -172,9 +208,6 @@ newtype Concur cmd a = Concur
 instance Show (Concur cmd a) where
     showsPrec _ _ = showString "Concur"
 
-instance AsConcur cmd => Codify (Concur cmd) cmd where
-    codify f = pure $ command' . Cmd_ . f
-
 -- | NB. Don't export MkMVar constructor to guarantee
 -- that that it only contains non-blocking 'newEmptyMVar' IO.
 newtype MkMVar a = MkMVar (IO a)
@@ -184,7 +217,7 @@ unMkMVar :: MkMVar a -> IO a
 unMkMVar (MkMVar m) = m
 
 -- | Allows usages  of 'conclude' inside a 'concurringly' block.
--- This resuls in a command that requires a handler, which may be used by 'conclude'
+-- This results in a command that requires a handler, which may be used by 'concur' or 'conclude'
 concurringly :: Concur cmd a -> (a -> cmd) -> ConcurCmd cmd
 concurringly = Cmd
 
@@ -192,6 +225,14 @@ concurringly = Cmd
 -- This results in a command that doesn't require a handler and may be 'postcmd''ed.
 concurringly_ :: Concur cmd () -> ConcurCmd cmd
 concurringly_ = Cmd_
+
+-- concurringly_2 :: (MonadTrans t, Monad (t Identity)) => t (Concur cmd) () -> t Identity (ConcurCmd cmd)
+-- concurringly_2 = postcmd' . concurringly_
+
+-- concurringly2 :: (AsConcur cmd, MonadState (DL.DList cmd) m) => t (Concur cmd) a -> (a -> cmd) -> t (Identity) ()
+-- concurringly2 m = postcmd' . concurringly m
+
+
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
     state m = Concur $ pure <$> Strict.state m
@@ -214,13 +255,49 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
                 (\b -> command' $ concurringly_ (Concur $ pure $ putMVar v b)))
         pure $ takeMVar v
 
+instance AsConcur cmd => Codify (Concur cmd) cmd where
+    codify f = pure $ command' . concurringly_ . f
+
 -- | This instance makes usages of 'conclude' concurrent when used
 -- insdie a 'concurringly' or 'concurringly_' block.
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
 -- The Concur monad allows scheduling the command in concurrently with other commands.
-instance AsConcur cmd => MonadDefer () (Concur cmd) where
-    defer f = Concur $ do
+instance AsConcur cmd => MonadDelegate () (Concur cmd) where
+    delegate f = Concur $ do
         v <- lift $ MkMVar newEmptyMVar
-        postcmd' $ Cmd_ $ f (\a -> Concur $ pure $ putMVar v a)
-        pure $ takeMVar v
+        io <- runConcur $ f (\a -> Concur $ pure $ putMVar v a)
+        pure $ (io *> takeMVar v)
+
+-- | This converts a command that requires a handler into a monad so that the do notation
+-- can be used to compose the handler for that command.
+-- 'concur' is used inside an 'evalContT' block or 'concurringly'.
+-- If it is inside a 'evalContT' then the command is evaluated sequentially.
+-- If it is inside a 'concurringly', then the command is evaluated concurrently
+-- with other commands.
+concur2 ::
+    ( MonadDelegate () m
+    , MonadState (DL.DList cmd) m
+    , Codify m cmd
+    , AsFacet (c cmd) cmd
+    )
+    => ((a -> cmd) -> c cmd) -> m a
+concur2 m = concurM (postcmd' . m)
+
+concurM ::
+    ( MonadDelegate () m
+    , Codify m cmd)
+    => ((a -> cmd) -> m ()) -> m a
+concurM m = delegate $ \k -> do
+    f <- codify k
+    m f
+-- FIXME: concur2 is not the same as concur
+-- due to Concur do monad always wrapping MVar
+
+-- The Concur monad allows schedule the command in concurrently with other 'concur'red commands.
+-- 'concur' is used inside an 'concurringly' or 'concurringly_' block.
+concur :: (AsConcur cmd, AsFacet (c cmd) cmd) => ((a -> cmd) -> c cmd) -> Concur cmd a
+concur k = Concur $ do
+    v <- lift $ MkMVar newEmptyMVar
+    postcmd' $ k (\a -> command' $ concurringly_ (Concur $ pure $ putMVar v a))
+    pure $ takeMVar v
