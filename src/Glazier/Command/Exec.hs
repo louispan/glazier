@@ -23,14 +23,14 @@ execConcurCmd ::
 execConcurCmd exec cmd = do
     case cmd of
         (Cmd (Concur m) k) -> do
-            ma <- execConcurCmd_ exec m
+            ea <- execConcurCmd_ exec m
             -- Now run the blocking io, which produces the final command
-            a <- liftIO ma
+            a <- liftIO $ either id pure ea
             exec (k a)
         (Cmd_ (Concur m)) -> do
-            ma <- execConcurCmd_ exec m
-            -- Now run the blocking io, which produces the final command
-            liftIO ma
+            ea <- execConcurCmd_ exec m
+            -- Now run the blocking io
+            liftIO $ either id pure ea
   where
     execConcurCmd_ exec' m = do
         -- get the list of commands to run

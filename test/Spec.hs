@@ -254,7 +254,7 @@ ioProgramWithConcur = do
         (a1, a2) <- conclude . concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
                 a1 <- concur GetLine
-                a2 <- concur2 GetLine
+                a2 <- concur GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of

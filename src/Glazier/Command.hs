@@ -1,6 +1,5 @@
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
-{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -171,7 +170,7 @@ conclude ::
     , MonadCont m
     )
     => ((a -> cmd) -> c cmd) -> m a
-conclude = concur2
+conclude = concur
 
 concludeM ::
     ( MonadDelegate () m
@@ -202,7 +201,7 @@ type ConcurCmd cmd = Cmd (Concur cmd) cmd
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
 newtype Concur cmd a = Concur
     -- The base IO doesn't block (only does newEmptyMVar), but the returns an IO that blocks.
-    { runConcur :: Strict.StateT (DL.DList cmd) MkMVar (IO a)
+    { runConcur :: Strict.StateT (DL.DList cmd) MkMVar (Either (IO a) a)
     }
 
 instance Show (Concur cmd a) where
@@ -235,25 +234,38 @@ concurringly_ = Cmd_
 
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
-    state m = Concur $ pure <$> Strict.state m
+    state m = Concur $ Right <$> Strict.state m
 
 instance Functor (Concur cmd) where
-    fmap f (Concur m) = Concur $ fmap f <$> m
+    fmap f (Concur m) = Concur $ (either (Left . fmap f) (Right . f)) <$> m
 
 -- | Applicative instand allows building up list of commands without blocking
 instance Applicative (Concur cmd) where
     pure = Concur . pure . pure
-    (Concur f) <*> (Concur a) = Concur $ liftA2 (<*>) f a
+    (Concur f) <*> (Concur a) = Concur $ liftA2 go f a
+      where
+        go :: Either (IO (a -> b)) (a -> b)
+             -> Either (IO a) a
+             -> Either (IO b) b
+        go g b = case (g, b) of
+            (Left g', Left b') -> Left (g' <*> b')
+            (Left g', Right b') -> Left (($b') <$> g')
+            (Right g', Left b') -> Left (g' <$> b')
+            (Right g', Right b') -> Right (g' b')
 
 -- Monad instance can't build commands without blocking.
 instance (AsConcur cmd) => Monad (Concur cmd) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
-        v <- lift $ MkMVar newEmptyMVar
-        postcmd' $ concurringly (Concur $ pure m')
-            (\a -> command' $ concurringly (k a)
-                (\b -> command' $ concurringly_ (Concur $ pure $ putMVar v b)))
-        pure $ takeMVar v
+        case m' of
+            -- pure value, no blocking required
+            Right a -> runConcur $ k a
+            Left ma -> do
+                v <- lift $ MkMVar newEmptyMVar
+                postcmd' $ concurringly (Concur $ pure (Left ma))
+                    (\a -> command' $ concurringly (k a)
+                        (\b -> command' $ concurringly_ (Concur $ pure $ Left $ putMVar v b)))
+                pure $ Left $ takeMVar v
 
 instance AsConcur cmd => Codify (Concur cmd) cmd where
     codify f = pure $ command' . concurringly_ . f
@@ -266,8 +278,8 @@ instance AsConcur cmd => Codify (Concur cmd) cmd where
 instance AsConcur cmd => MonadDelegate () (Concur cmd) where
     delegate f = Concur $ do
         v <- lift $ MkMVar newEmptyMVar
-        io <- runConcur $ f (\a -> Concur $ pure $ putMVar v a)
-        pure $ (io *> takeMVar v)
+        b <- runConcur $ f (\a -> Concur $ lift $ pure $ Left $ putMVar v a)
+        pure $ Left (either id pure b *> takeMVar v)
 
 -- | This converts a command that requires a handler into a monad so that the do notation
 -- can be used to compose the handler for that command.
@@ -275,14 +287,14 @@ instance AsConcur cmd => MonadDelegate () (Concur cmd) where
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
-concur2 ::
+concur ::
     ( MonadDelegate () m
     , MonadState (DL.DList cmd) m
     , Codify m cmd
     , AsFacet (c cmd) cmd
     )
     => ((a -> cmd) -> c cmd) -> m a
-concur2 m = concurM (postcmd' . m)
+concur m = concurM (postcmd' . m)
 
 concurM ::
     ( MonadDelegate () m
@@ -291,13 +303,3 @@ concurM ::
 concurM m = delegate $ \k -> do
     f <- codify k
     m f
--- FIXME: concur2 is not the same as concur
--- due to Concur do monad always wrapping MVar
-
--- The Concur monad allows schedule the command in concurrently with other 'concur'red commands.
--- 'concur' is used inside an 'concurringly' or 'concurringly_' block.
-concur :: (AsConcur cmd, AsFacet (c cmd) cmd) => ((a -> cmd) -> c cmd) -> Concur cmd a
-concur k = Concur $ do
-    v <- lift $ MkMVar newEmptyMVar
-    postcmd' $ k (\a -> command' $ concurringly_ (Concur $ pure $ putMVar v a))
-    pure $ takeMVar v
