@@ -68,50 +68,54 @@ instance Show (Cmd f cmd) where
 
 -- | Converts a monad transformer stack with a 'State' of list of commands
 -- to output a single command, using the current monad context.
-class Codify m cmd | m -> cmd where
+class Codify cmd m | m -> cmd where
     codify :: (a -> m ()) -> m (a -> cmd)
 
 -- | Convert a State into a single command, but running it with mempty like Writer.
-instance AsFacet [cmd] cmd => Codify (Strict.State (DL.DList cmd)) cmd where
+instance AsFacet [cmd] cmd => Codify cmd (Strict.State (DL.DList cmd)) where
     codify f = pure $ \a -> case DL.toList . (`Strict.execState` mempty) $ f a of
         [x] -> x
         xs -> command' xs
 
-instance AsFacet [cmd] cmd => Codify (Strict.AState (DL.DList cmd)) cmd where
+instance AsFacet [cmd] cmd => Codify cmd (Strict.AState (DL.DList cmd)) where
     codify f = pure $ \a -> case DL.toList . (`Strict.execAState` mempty) $ f a of
         [x] -> x
         xs -> command' xs
 
-instance AsFacet [cmd] cmd => Codify (Lazy.State (DL.DList cmd)) cmd where
+instance AsFacet [cmd] cmd => Codify cmd (Lazy.State (DL.DList cmd)) where
     codify f = pure $ \a -> case DL.toList . (`Lazy.execState` mempty) $ f a of
         [x] -> x
         xs -> command' xs
 
-instance AsFacet [cmd] cmd => Codify (Lazy.AState (DL.DList cmd)) cmd where
+instance AsFacet [cmd] cmd => Codify cmd (Lazy.AState (DL.DList cmd)) where
     codify f = pure $ \a -> case DL.toList . (`Lazy.execAState` mempty) $ f a of
         [x] -> x
         xs -> command' xs
 
-instance (Codify m cmd, Monad m) => Codify (IdentityT m) cmd where
+instance (Codify cmd m, Monad m) => Codify cmd (IdentityT m) where
     codify f = lift . codify $ runIdentityT . f
 
-instance (Codify m cmd, Monad m) => Codify (ContT () m) cmd where
+instance (Codify cmd m, Monad m) => Codify cmd (ContT () m) where
     codify f = lift . codify $ evalContT . f
 
-instance (Codify m cmd, Monad m) => Codify (AContT () m) cmd where
+instance (Codify cmd m, Monad m) => Codify cmd (AContT () m) where
     codify f = lift . codify $ evalAContT . f
 
-instance (Codify m cmd, Monad m) => Codify (ReaderT r m) cmd where
+instance (Codify cmd m, Monad m) => Codify cmd (ReaderT r m) where
     codify f = do
         r <- ask
         lift . codify $ (`runReaderT` r) . f
 
-instance (Codify m cmd, Monad m) => Codify (AReaderT r m) cmd where
+instance (Codify cmd m, Monad m) => Codify cmd (AReaderT r m) where
     codify f = do
         r <- ask
         lift . codify $ (`runAReaderT` r) . f
 
-type MonadCommand m cmd = (MonadState (DL.DList cmd) m, Codify m cmd)
+type MonadCommand cmd m =
+    ( MonadDelegate () m
+    , Codify cmd m
+    , MonadState (DL.DList cmd) m
+    )
 
 -- | convert a request type to a command type.
 -- This is used for commands that doesn't have a continuation.
@@ -148,8 +152,7 @@ postcmd' = post . command'
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
 conclude_ ::
-    ( MonadDelegate () m
-    , Codify m cmd)
+    ( MonadCommand cmd m) -- NB. @MonadState (DL.DList cmd) m@ is redundant
     => ((a -> cmd) -> m ()) -> m a
 conclude_ m = delegate $ \k -> do
     f <- codify k
@@ -157,9 +160,7 @@ conclude_ m = delegate $ \k -> do
 
 -- | Variation of 'conclude_' for input monadic function that also produce a command.
 conclude ::
-    ( MonadDelegate () m
-    , Codify m cmd
-    , MonadState (DL.DList cmd) m
+    ( MonadCommand cmd m
     , AsFacet (c cmd) cmd
     )
     => ((a -> cmd) -> m (c cmd)) -> m a
@@ -170,9 +171,7 @@ conclude m = delegate $ \k -> do
 
 -- | Variation of 'conclude_' for non-monadic input functions produces a command.
 conclude' ::
-    ( MonadDelegate () m
-    , MonadState (DL.DList cmd) m
-    , Codify m cmd
+    ( MonadCommand cmd m
     , AsFacet (c cmd) cmd
     )
     => ((a -> cmd) -> c cmd) -> m a
@@ -184,8 +183,7 @@ conclude' m = conclude_ (postcmd' . m)
 -- 'ensue' is used for operations that MUST run sequentially,
 -- not concurrently.
 ensue_ ::
-    ( MonadDelegate () m
-    , Codify m cmd
+    ( MonadCommand cmd m
     , MonadCont m
     )
     => ((a -> cmd) -> m ()) -> m a
@@ -193,9 +191,7 @@ ensue_ = conclude_
 
 -- | Variation of 'ensue_' for input monadic function that also produce a command.
 ensue ::
-    ( MonadDelegate () m
-    , Codify m cmd
-    , MonadState (DL.DList cmd) m
+    ( MonadCommand cmd m
     , AsFacet (c cmd) cmd
     , MonadCont m
     )
@@ -204,9 +200,7 @@ ensue = conclude
 
 -- | Variation of 'ensue_' for non-monadic input functions produces a command.
 ensue' ::
-    ( MonadDelegate () m
-    , MonadState (DL.DList cmd) m
-    , Codify m cmd
+    ( MonadCommand cmd m
     , AsFacet (c cmd) cmd
     , MonadCont m
     )
@@ -240,27 +234,25 @@ newtype MkMVar a = MkMVar (IO a)
 unMkMVar :: MkMVar a -> IO a
 unMkMVar (MkMVar m) = m
 
--- | Allows usages  of 'ensue' inside a 'concurringly' block.
--- This results in a function (that requires a handler) which may be passed into 'ensue''
+-- | 'conclude' can be used inside a 'concurCmd' or 'concurringly' block.
+-- 'concurCmd' results in a function (that requires a handler) which may be passed into 'ensue''
 concurCmd :: Concur cmd a -> (a -> cmd) -> ConcurCmd cmd
 concurCmd = Cmd
 
--- | Allows usages  of 'ensue' inside a 'concurring' block.
--- This results in a command that doesn't require a handler and may be passed into 'postcmd''.
+-- | 'conclude' can be used inside a 'concurCmd_' or 'concurringly_' block.
+-- 'concurCmd_' results in a command that doesn't require a handler and may be passed into 'postcmd''.
 concurCmd_ :: AsFacet () cmd => Concur cmd () -> ConcurCmd cmd
 concurCmd_ m = Cmd m command
 
--- This is a monad morphism that can be used to 'hoist' transformer stacks on @Concur cmd a@
+-- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd a@
 concurringly ::
-    ( MonadDelegate () m
-    , MonadState (DL.DList cmd) m
-    , Codify m cmd
+    ( MonadCommand cmd m
     , AsConcur cmd
     , MonadCont m
     ) => Concur cmd a -> m a
 concurringly = ensue' . concurCmd
 
--- This is a monad morphism that can be used to 'hoist' transformer stacks on @Concur cmd ()@
+-- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
 concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
 concurringly_ = postcmd' . concurCmd_
 
@@ -298,7 +290,7 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
                         (\b -> command' $ concurCmd_ (Concur $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v
 
-instance AsConcur cmd => Codify (Concur cmd) cmd where
+instance AsConcur cmd => Codify cmd (Concur cmd) where
     codify f = pure $ command' . concurCmd_ . f
 
 -- | This instance makes usages of 'ensue' concurrent when used
