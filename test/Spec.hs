@@ -234,25 +234,6 @@ ioProgram = do
     postcmd' $ PutStrLn "Write two things"
     evalContT $ do
         -- Use the continuation monad to compose the function to pass into GetLine
-        a1 <- ensue' GetLine
-        a2 <- ensue' GetLine
-        -- Do something monadic/different based on the return value.
-        case a1 of
-            "secret" -> postcmd' $ PutStrLn "Easter egg!"
-            _ -> do
-                postcmd' $ PutStrLn "Write something else"
-                -- more GetLine input
-                b <- ensue' GetLine
-                postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
-
--- | using only concur
-ioProgramWithOnlyConcur ::
-    ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd) => State (DL.DList cmd) ()
-ioProgramWithOnlyConcur = do
-    postcmd' $ PutStrLn "Write two things"
-    concurringly_ $ do
-        -- Use the Concur monad to batch two GetLines concurrently
         a1 <- conclude' GetLine
         a2 <- conclude' GetLine
         -- Do something monadic/different based on the return value.
@@ -264,17 +245,37 @@ ioProgramWithOnlyConcur = do
                 b <- conclude' GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
+-- | using only concur
+ioProgramWithOnlyConcur ::
+    ( AsFacet (IOEffect cmd) cmd
+    , AsConcur cmd) => State (DL.DList cmd) ()
+ioProgramWithOnlyConcur = do
+    postcmd' $ PutStrLn "Write two things"
+    concurringly_ $ do
+        -- Use the Concur monad to batch two GetLines concurrently
+        a1 <- dispatch' GetLine
+        a2 <- dispatch' GetLine
+        -- Do something monadic/different based on the return value.
+        case a1 of
+            "secret" -> postcmd' $ PutStrLn "Easter egg!"
+            _ -> do
+                postcmd' $ PutStrLn "Write something else"
+                -- more GetLine input
+                b <- dispatch' GetLine
+                postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+
 -- | using concur & cont together
 ioProgramWithConcur ::
     ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd, AsFacet [cmd] cmd) => State (DL.DList cmd) ()
+    , AsConcur cmd
+    , AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 ioProgramWithConcur = do
     postcmd' $ PutStrLn "Write two things"
     evalContT $ do
         (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
-                a1 <- conclude' GetLine
-                a2 <- conclude' GetLine
+                a1 <- dispatch' GetLine
+                a2 <- dispatch' GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of
@@ -282,7 +283,7 @@ ioProgramWithConcur = do
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- ensue' GetLine
+                b <- conclude' GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | Program using both effects

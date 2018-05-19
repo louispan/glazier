@@ -16,18 +16,17 @@ module Glazier.Command
     ( Cmd(..)
     , Codify(..)
     , Commander
-    , Conclude
     , command
     , command'
     , post
     , postcmd
     , postcmd'
+    , dispatch_
+    , dispatch
+    , dispatch'
     , conclude_
     , conclude
     , conclude'
-    , ensue_
-    , ensue
-    , ensue'
     , concurringly
     , concurringly_
     , AsConcur
@@ -68,11 +67,11 @@ instance Show (Cmd f cmd) where
         showString "Cmd " . shows f
 
 -- | Converts a monad transformer stack with a 'State' of list of commands
--- to output a single command, using the current monad context.
+-- to output a single command, using the current monad context,
+-- by running the State of comands with mempty like Writer.
 class Codify cmd m | m -> cmd where
     codify :: (a -> m ()) -> m (a -> cmd)
 
--- | Convert a State into a single command, but running it with mempty like Writer.
 instance AsFacet [cmd] cmd => Codify cmd (Strict.State (DL.DList cmd)) where
     codify f = pure $ \a -> case DL.toList . (`Strict.execState` mempty) $ f a of
         [x] -> x
@@ -112,12 +111,10 @@ instance (Codify cmd m, Monad m) => Codify cmd (AReaderT r m) where
         r <- ask
         lift . codify $ (`runAReaderT` r) . f
 
-type Commander cmd m = MonadState (DL.DList cmd) m
-
-type Conclude cmd m =
+type Commander cmd m =
     ( MonadDelegate () m
     , Codify cmd m
-    , Commander cmd m
+    , MonadState (DL.DList cmd) m
     )
 
 -- | convert a request type to a command type.
@@ -137,78 +134,78 @@ command' = review facet
 -- | Add a command to the list of commands for this MonadState.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
-post :: (Commander cmd m) => cmd -> m ()
+post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
 post c = id %= (`DL.snoc` c)
 
 -- | @'postcmd' = 'post' . 'command'@
-postcmd :: (Commander cmd m, AsFacet c cmd) => c -> m ()
+postcmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
 postcmd = post . command
 
 -- | @'postcmd'' = 'post' . 'command''@
-postcmd' :: (Commander cmd m, AsFacet (c cmd) cmd) => c cmd -> m ()
+postcmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
 postcmd' = post . command'
 
 -- | This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
--- 'conclude' is used inside an 'evalContT' block or 'concurringly'.
+-- 'dispatch' is used inside an 'evalContT' block or 'concurringly'.
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
-conclude_ ::
-    ( Conclude cmd m) -- NB. @MonadState (DL.DList cmd) m@ is redundant
+dispatch_ ::
+    ( Commander cmd m) -- NB. @MonadState (DL.DList cmd) m@ is redundant
     => ((a -> cmd) -> m ()) -> m a
-conclude_ m = delegate $ \k -> do
+dispatch_ m = delegate $ \k -> do
     f <- codify k
     m f
 
--- | Variation of 'conclude_' for input monadic function that also produce a command.
-conclude ::
-    ( Conclude cmd m
+-- | Variation of 'dispatch_' for input monadic function that also produce a command.
+dispatch ::
+    ( Commander cmd m
     , AsFacet (c cmd) cmd
     )
     => ((a -> cmd) -> m (c cmd)) -> m a
-conclude m = delegate $ \k -> do
+dispatch m = delegate $ \k -> do
     f <- codify k
     c <- m f
     postcmd' c
 
--- | Variation of 'conclude_' for non-monadic input functions produces a command.
-conclude' ::
-    ( Conclude cmd m
+-- | Variation of 'dispatch_' for non-monadic input functions produces a command.
+dispatch' ::
+    ( Commander cmd m
     , AsFacet (c cmd) cmd
     )
     => ((a -> cmd) -> c cmd) -> m a
-conclude' m = conclude_ (postcmd' . m)
+dispatch' m = dispatch_ (postcmd' . m)
 
--- | Sequential variation of 'conclude' that forces the transformer stack to use 'ContT'.
+-- | Sequential variation of 'dispatch' that forces the transformer stack to use 'ContT'.
 -- The 'MonadCont' constraint is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack.
--- 'ensue' is used for operations that MUST run sequentially,
+-- 'conclude' is used for operations that MUST run sequentially,
 -- not concurrently.
-ensue_ ::
-    ( Conclude cmd m
+conclude_ ::
+    ( Commander cmd m
     , MonadCont m
     )
     => ((a -> cmd) -> m ()) -> m a
-ensue_ = conclude_
+conclude_ = dispatch_
 
--- | Variation of 'ensue_' for input monadic function that also produce a command.
-ensue ::
-    ( Conclude cmd m
+-- | Variation of 'conclude_' for input monadic function that also produce a command.
+conclude ::
+    ( Commander cmd m
     , AsFacet (c cmd) cmd
     , MonadCont m
     )
     => ((a -> cmd) -> m (c cmd)) -> m a
-ensue = conclude
+conclude = dispatch
 
--- | Variation of 'ensue_' for non-monadic input functions produces a command.
-ensue' ::
-    ( Conclude cmd m
+-- | Variation of 'conclude_' for non-monadic input functions produces a command.
+conclude' ::
+    ( Commander cmd m
     , AsFacet (c cmd) cmd
     , MonadCont m
     )
     => ((a -> cmd) -> c cmd) -> m a
-ensue' = conclude'
+conclude' = dispatch'
 
 ----------------------------------------------
 -- Batch independant commands
@@ -237,26 +234,26 @@ newtype MkMVar a = MkMVar (IO a)
 unMkMVar :: MkMVar a -> IO a
 unMkMVar (MkMVar m) = m
 
--- | 'conclude' can be used inside a 'concurCmd' or 'concurringly' block.
--- 'concurCmd' results in a function (that requires a handler) which may be passed into 'ensue''
+-- | 'dispatch' can be used inside a 'concurCmd' or 'concurringly' block.
+-- 'concurCmd' results in a function (that requires a handler) which may be passed into 'conclude''
 concurCmd :: Concur cmd a -> (a -> cmd) -> ConcurCmd cmd
 concurCmd = Cmd
 
--- | 'conclude' can be used inside a 'concurCmd_' or 'concurringly_' block.
+-- | 'dispatch' can be used inside a 'concurCmd_' or 'concurringly_' block.
 -- 'concurCmd_' results in a command that doesn't require a handler and may be passed into 'postcmd''.
 concurCmd_ :: AsFacet () cmd => Concur cmd () -> ConcurCmd cmd
 concurCmd_ m = Cmd m command
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd a@
 concurringly ::
-    ( Conclude cmd m
+    ( Commander cmd m
     , AsConcur cmd
     , MonadCont m
     ) => Concur cmd a -> m a
-concurringly = ensue' . concurCmd
+concurringly = conclude' . concurCmd
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
-concurringly_ :: (Commander cmd m, AsConcur cmd) => Concur cmd () -> m ()
+concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
 concurringly_ = postcmd' . concurCmd_
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
@@ -296,7 +293,7 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
 instance AsConcur cmd => Codify cmd (Concur cmd) where
     codify f = pure $ command' . concurCmd_ . f
 
--- | This instance makes usages of 'ensue' concurrent when used
+-- | This instance makes usages of 'conclude' concurrent when used
 -- insdie a 'concurringly' or 'concurringly_' block.
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
