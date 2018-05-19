@@ -50,6 +50,7 @@ extra-deps:
 - unliftio-0.2.7.0
 - unliftio-core-0.1.1.0
 - async-2.2.1
+- mmorph-1.0.9
 
 # Override default flag values for local packages and extra-deps
 flags: {}

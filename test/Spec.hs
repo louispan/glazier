@@ -9,6 +9,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 -- Example of interpreting using polymorphic variant
@@ -78,7 +79,7 @@ instance Show HelloWorldEffect where
     showsPrec _ ByeWorld = showString "ByeWorld"
 
 -- | Define the sum of all variants
-type AppCmd' cmd = Which '[[cmd], ConcurCmd cmd, IOEffect cmd, HelloWorldEffect]
+type AppCmd' cmd = Which '[(), [cmd], ConcurCmd cmd, IOEffect cmd, HelloWorldEffect]
 -- | Add a newtype wrapper to allow recursive definition
 newtype AppCmd = AppCmd { unAppCmd :: AppCmd' AppCmd}
     deriving Show
@@ -111,6 +112,7 @@ execEffects_ ::
     => (cmd -> m ()) -> cmd -> MaybeT m ()
 execEffects_ exec c =
     maybeExec (traverse_ @[] exec) c
+    <|> maybeExec pure c
     <|> maybeExec (execConcurCmd exec) c
     <|> maybeExec (execIOEffect exec) c
     <|> maybeExec execHelloWorldEffect c
@@ -187,9 +189,27 @@ testEffects_ ::
     => (cmd -> m ()) -> cmd -> MaybeT m ()
 testEffects_ exec c =
     maybeExec (traverse_ @[] exec) c
+    <|> maybeExec pure c
     <|> maybeExec (execConcurCmd exec) c
     <|> maybeExec (testIOEffect exec) c
     <|> maybeExec testHelloWorldEffect c
+
+-- -- | Combine test interpreters
+-- testEffects2_ :: forall m r.
+--     ( MonadReader r m
+--     , Has (Tagged Output (TVar [String])) r
+--     , Has (Tagged Input (TVar [String])) r
+--     , MonadUnliftIO m
+--     )
+--     => (AppCmd -> m ()) -> AppCmd -> m ()
+-- testEffects2_ exec (AppCmd c) =
+--     switch c (
+--         cases ((traverse_ @[] exec :: [AppCmd] -> m ())
+--             ./ (execUnit :: () -> m ())
+--             ./ (execConcurCmd exec :: ConcurCmd AppCmd -> m ())
+--             ./ (testIOEffect exec :: IOEffect AppCmd -> m ())
+--             ./ (testHelloWorldEffect :: HelloWorldEffect -> m ())
+--             ./ nil))
 
 -- | Tie testEffects_ with itself to get the final interpreter
 testEffects ::
@@ -214,15 +234,15 @@ ioProgram = do
     postcmd' $ PutStrLn "Write two things"
     evalContT $ do
         -- Use the continuation monad to compose the function to pass into GetLine
-        a1 <- conclude GetLine
-        a2 <- conclude GetLine
+        a1 <- ensue' GetLine
+        a2 <- ensue' GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> postcmd' $ PutStrLn "Easter egg!"
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- conclude GetLine
+                b <- ensue' GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using only concur
@@ -231,17 +251,17 @@ ioProgramWithOnlyConcur ::
     , AsConcur cmd) => State (DL.DList cmd) ()
 ioProgramWithOnlyConcur = do
     postcmd' $ PutStrLn "Write two things"
-    postcmd' $ concurringly_ $ do
+    concurringly_ $ do
         -- Use the Concur monad to batch two GetLines concurrently
-        a1 <- concur GetLine
-        a2 <- concur GetLine
+        a1 <- conclude' GetLine
+        a2 <- conclude' GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> postcmd' $ PutStrLn "Easter egg!"
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- concur GetLine
+                b <- conclude' GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using concur & cont together
@@ -251,10 +271,10 @@ ioProgramWithConcur ::
 ioProgramWithConcur = do
     postcmd' $ PutStrLn "Write two things"
     evalContT $ do
-        (a1, a2) <- conclude . concurringly $ do
+        (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
-                a1 <- concur GetLine
-                a2 <- concur GetLine
+                a1 <- conclude' GetLine
+                a2 <- conclude' GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of
@@ -262,7 +282,7 @@ ioProgramWithConcur = do
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- conclude GetLine
+                b <- ensue' GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | Program using both effects

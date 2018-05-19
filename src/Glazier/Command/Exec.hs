@@ -10,8 +10,7 @@ import Data.Foldable
 import Glazier.Command
 import qualified UnliftIO.Concurrent as U
 
-import Debug.Trace
-
+-- | NB. THe danger of maybeExec is that it is not a compile error not to handle all the variants of command
 maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> c -> MaybeT m b
 maybeExec k y = MaybeT . sequenceA $ k <$> preview facet y
 
@@ -27,14 +26,14 @@ execConcurCmd exec cmd = do
             -- Now run the blocking io, which produces the final command
             a <- liftIO $ either id pure ea
             exec (k a)
-        (Cmd_ (Concur m)) -> do
-            ea <- execConcurCmd_ exec m
-            -- Now run the blocking io
-            liftIO $ either id pure ea
+        -- (Cmd_ (Concur m)) -> do
+        --     ea <- execConcurCmd_ exec m
+        --     -- Now run the blocking io
+        --     liftIO $ either id pure ea
   where
     execConcurCmd_ exec' m = do
         -- get the list of commands to run
         (ma, cs) <- liftIO $ unMkMVar $ runStateT m mempty
         -- run the batched commands in separate threads
-        traverse_ (void . U.forkIO . exec') (trace (show (length (DL.toList cs))) (DL.toList cs))
+        traverse_ (void . U.forkIO . exec') (DL.toList cs)
         pure ma

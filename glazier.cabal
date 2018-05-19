@@ -23,10 +23,8 @@ library
                      , data-diverse-lens >= 3.1.1
                      , dlist >= 0.8
                      , lens >= 4
-                     , mtl >= 2 && <3
-                     , stm >= 2.4
-                     , tagged >= 0.8
-                     , transformers >= 0.4 && < 0.6
+                     , mtl >= 2
+                     , transformers >= 0.4
                      , unliftio >= 0.2.7.0
                      , unliftio-core >= 0.1.1.0
   ghc-options:        -Wall
