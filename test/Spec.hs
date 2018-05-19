@@ -234,15 +234,15 @@ ioProgram = do
     postcmd' $ PutStrLn "Write two things"
     evalContT $ do
         -- Use the continuation monad to compose the function to pass into GetLine
-        a1 <- conclude' GetLine
-        a2 <- conclude' GetLine
+        a1 <- conclude $ postcmd' . GetLine
+        a2 <- conclude $ postcmd' . GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> postcmd' $ PutStrLn "Easter egg!"
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- conclude' GetLine
+                b <- conclude $ postcmd' . GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using only concur
@@ -253,15 +253,15 @@ ioProgramWithOnlyConcur = do
     postcmd' $ PutStrLn "Write two things"
     concurringly_ $ do
         -- Use the Concur monad to batch two GetLines concurrently
-        a1 <- dispatch' GetLine
-        a2 <- dispatch' GetLine
+        a1 <- dispatch $ postcmd' . GetLine
+        a2 <- dispatch $ postcmd' . GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> postcmd' $ PutStrLn "Easter egg!"
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- dispatch' GetLine
+                b <- dispatch $ postcmd' . GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using concur & cont together
@@ -274,8 +274,8 @@ ioProgramWithConcur = do
     evalContT $ do
         (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
-                a1 <- dispatch' GetLine
-                a2 <- dispatch' GetLine
+                a1 <- dispatch $ postcmd' . GetLine
+                a2 <- dispatch $ postcmd' . GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of
@@ -283,7 +283,7 @@ ioProgramWithConcur = do
             _ -> do
                 postcmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- conclude' GetLine
+                b <- conclude $ postcmd' . GetLine
                 postcmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | Program using both effects

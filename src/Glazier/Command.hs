@@ -22,12 +22,8 @@ module Glazier.Command
     , post
     , postcmd
     , postcmd'
-    , dispatch_
     , dispatch
-    , dispatch'
-    , conclude_
     , conclude
-    , conclude'
     , concurringly
     , concurringly_
     , AsConcur
@@ -157,60 +153,31 @@ postcmd' = post . command'
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
-dispatch_ ::
+--
+-- @
+-- If tne input function purely returns a command, you can use:
+-- dispatch . (postcmd' .) :: ((a -> cmd) -> c cmd) -> m a
+--
+-- If tne input function monnadic returns a command, you can use:
+-- dispatch . ((>>= postcmd') .) :: ((a -> cmd) -> m (c cmd)) -> m a
+-- @
+dispatch ::
     ( MonadCommand cmd m) -- NB. @MonadState (DL.DList cmd) m@ is redundant
     => ((a -> cmd) -> m ()) -> m a
-dispatch_ m = delegate $ \k -> do
-    f <- codify k
-    m f
-
--- | Variation of 'dispatch_' for input monadic function that also produce a command.
-dispatch ::
-    ( MonadCommand cmd m
-    , AsFacet (c cmd) cmd
-    )
-    => ((a -> cmd) -> m (c cmd)) -> m a
 dispatch m = delegate $ \k -> do
     f <- codify k
-    c <- m f
-    postcmd' c
-
--- | Variation of 'dispatch_' for non-monadic input functions produces a command.
-dispatch' ::
-    ( MonadCommand cmd m
-    , AsFacet (c cmd) cmd
-    )
-    => ((a -> cmd) -> c cmd) -> m a
-dispatch' m = dispatch_ (postcmd' . m)
+    m f
 
 -- | Sequential variation of 'dispatch' that forces the transformer stack to use 'ContT'.
 -- The 'MonadCont' constraint is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack.
 -- 'conclude' is used for operations that MUST run sequentially, not concurrently.
-conclude_ ::
+conclude ::
     ( MonadCommand cmd m
     , MonadCont m
     )
     => ((a -> cmd) -> m ()) -> m a
-conclude_ = dispatch_
-
--- | Variation of 'conclude_' for input monadic function that also produce a command.
-conclude ::
-    ( MonadCommand cmd m
-    , AsFacet (c cmd) cmd
-    , MonadCont m
-    )
-    => ((a -> cmd) -> m (c cmd)) -> m a
 conclude = dispatch
-
--- | Variation of 'conclude_' for non-monadic input functions produces a command.
-conclude' ::
-    ( MonadCommand cmd m
-    , AsFacet (c cmd) cmd
-    , MonadCont m
-    )
-    => ((a -> cmd) -> c cmd) -> m a
-conclude' = dispatch'
 
 ----------------------------------------------
 -- Batch independant commands
@@ -261,7 +228,7 @@ concurringly ::
     , AsConcur cmd
     , MonadCont m
     ) => Concur cmd a -> m a
-concurringly = conclude' . concurCmd
+concurringly m = conclude $ postcmd' . (concurCmd m)
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
 concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
