@@ -15,7 +15,8 @@
 module Glazier.Command
     ( Cmd(..)
     , Codify(..)
-    , MonadCommand
+    , Commander
+    , Conclude
     , command
     , command'
     , post
@@ -111,10 +112,12 @@ instance (Codify cmd m, Monad m) => Codify cmd (AReaderT r m) where
         r <- ask
         lift . codify $ (`runAReaderT` r) . f
 
-type MonadCommand cmd m =
+type Commander cmd m = MonadState (DL.DList cmd) m
+
+type Conclude cmd m =
     ( MonadDelegate () m
     , Codify cmd m
-    , MonadState (DL.DList cmd) m
+    , Commander cmd m
     )
 
 -- | convert a request type to a command type.
@@ -134,15 +137,15 @@ command' = review facet
 -- | Add a command to the list of commands for this MonadState.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
-post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
+post :: (Commander cmd m) => cmd -> m ()
 post c = id %= (`DL.snoc` c)
 
 -- | @'postcmd' = 'post' . 'command'@
-postcmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
+postcmd :: (Commander cmd m, AsFacet c cmd) => c -> m ()
 postcmd = post . command
 
 -- | @'postcmd'' = 'post' . 'command''@
-postcmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
+postcmd' :: (Commander cmd m, AsFacet (c cmd) cmd) => c cmd -> m ()
 postcmd' = post . command'
 
 -- | This converts a monadic function that requires a handler for @a@ into
@@ -152,7 +155,7 @@ postcmd' = post . command'
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
 conclude_ ::
-    ( MonadCommand cmd m) -- NB. @MonadState (DL.DList cmd) m@ is redundant
+    ( Conclude cmd m) -- NB. @MonadState (DL.DList cmd) m@ is redundant
     => ((a -> cmd) -> m ()) -> m a
 conclude_ m = delegate $ \k -> do
     f <- codify k
@@ -160,7 +163,7 @@ conclude_ m = delegate $ \k -> do
 
 -- | Variation of 'conclude_' for input monadic function that also produce a command.
 conclude ::
-    ( MonadCommand cmd m
+    ( Conclude cmd m
     , AsFacet (c cmd) cmd
     )
     => ((a -> cmd) -> m (c cmd)) -> m a
@@ -171,7 +174,7 @@ conclude m = delegate $ \k -> do
 
 -- | Variation of 'conclude_' for non-monadic input functions produces a command.
 conclude' ::
-    ( MonadCommand cmd m
+    ( Conclude cmd m
     , AsFacet (c cmd) cmd
     )
     => ((a -> cmd) -> c cmd) -> m a
@@ -183,7 +186,7 @@ conclude' m = conclude_ (postcmd' . m)
 -- 'ensue' is used for operations that MUST run sequentially,
 -- not concurrently.
 ensue_ ::
-    ( MonadCommand cmd m
+    ( Conclude cmd m
     , MonadCont m
     )
     => ((a -> cmd) -> m ()) -> m a
@@ -191,7 +194,7 @@ ensue_ = conclude_
 
 -- | Variation of 'ensue_' for input monadic function that also produce a command.
 ensue ::
-    ( MonadCommand cmd m
+    ( Conclude cmd m
     , AsFacet (c cmd) cmd
     , MonadCont m
     )
@@ -200,7 +203,7 @@ ensue = conclude
 
 -- | Variation of 'ensue_' for non-monadic input functions produces a command.
 ensue' ::
-    ( MonadCommand cmd m
+    ( Conclude cmd m
     , AsFacet (c cmd) cmd
     , MonadCont m
     )
@@ -246,14 +249,14 @@ concurCmd_ m = Cmd m command
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd a@
 concurringly ::
-    ( MonadCommand cmd m
+    ( Conclude cmd m
     , AsConcur cmd
     , MonadCont m
     ) => Concur cmd a -> m a
 concurringly = ensue' . concurCmd
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
-concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
+concurringly_ :: (Commander cmd m, AsConcur cmd) => Concur cmd () -> m ()
 concurringly_ = postcmd' . concurCmd_
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
