@@ -186,8 +186,7 @@ dispatch' m = dispatch_ (postcmd' . m)
 -- | Sequential variation of 'dispatch' that forces the transformer stack to use 'ContT'.
 -- The 'MonadCont' constraint is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack.
--- 'conclude' is used for operations that MUST run sequentially,
--- not concurrently.
+-- 'conclude' is used for operations that MUST run sequentially, not concurrently.
 conclude_ ::
     ( MonadCommand cmd m
     , MonadCont m
@@ -225,7 +224,13 @@ type ConcurCmd cmd = Cmd (Concur cmd) cmd
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
 newtype Concur cmd a = Concur
-    -- The base IO doesn't block (only does newEmptyMVar), but the returns an IO that blocks.
+    -- The base IO doesn't block (only does newEmptyMVar), but may return an IO that blocks.
+    -- The return is @Either (IO a) a@ where 'Left' is used for blocking IO
+    -- and 'Right' is used for nonblocking pure values.
+    -- This distinction prevents nested layers of MVar for pure monadic binds.
+    -- See the instance of 'Monad' for 'Concur'.
+    -- Once a blocking IO is returned, then all subsequent binds require another nested MVar.
+    -- So it is more efficient to groups of pure binds first before binding with blocking code.
     { runConcur :: Strict.StateT (DL.DList cmd) MkMVar (Either (IO a) a)
     }
 
@@ -287,7 +292,8 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
         case m' of
-            -- pure value, no blocking required
+            -- pure value, no blocking required,
+            -- avoid using MVar.
             Right a -> runConcur $ k a
             Left ma -> do
                 v <- lift $ MkMVar newEmptyMVar
