@@ -46,6 +46,7 @@ import Control.Monad.Trans.AReader
 import Control.Monad.Trans.AState.Lazy as Lazy
 import Control.Monad.Trans.AState.Strict as Strict
 import Control.Monad.Trans.Identity
+import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.State.Lazy as Lazy
 import Control.Monad.Trans.State.Strict as Strict
 import Data.Diverse.Lens
@@ -112,6 +113,18 @@ instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (AReaderT r m) where
     codify f = do
         r <- ask
         lift . codify $ (`runAReaderT` r) . f
+
+instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (MaybeT m) where
+    codify f = lift . codify $ void . runMaybeT . f
+
+-- instance (AsFacet e cmd, MonadCodify cmd m, Monad m, MonadState (DL.DList cmd) m) => MonadCodify cmd (ExceptT e m) where
+--     codify f = lift . codify $ go . runExceptT . f
+--       where
+--         go m = do
+--             ea <- m
+--             case ea of
+--                 Left e -> postcmd e
+--                 Right () -> pure ()
 
 type MonadCommand cmd m =
     ( MonadDelegate () m
