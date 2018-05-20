@@ -175,7 +175,9 @@ postcmd' = post . command'
 -- dispatch . ((>>= postcmd') .) :: ((a -> cmd) -> m (c cmd)) -> m a
 -- @
 dispatch ::
-    ( MonadCommand cmd m) -- NB. @MonadState (DL.DList cmd) m@ is redundant
+    ( MonadDelegate () m
+    , MonadCodify cmd m
+    )
     => ((a -> cmd) -> m ()) -> m a
 dispatch m = delegate $ \k -> do
     f <- codify k
@@ -186,7 +188,8 @@ dispatch m = delegate $ \k -> do
 -- using 'Concur' at the bottom of the transformer stack.
 -- 'conclude' is used for operations that MUST run sequentially, not concurrently.
 conclude ::
-    ( MonadCommand cmd m
+    ( MonadDelegate () m
+    , MonadCodify cmd m
     , MonadCont m
     )
     => ((a -> cmd) -> m ()) -> m a
