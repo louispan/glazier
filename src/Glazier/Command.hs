@@ -20,6 +20,8 @@ module Glazier.Command
     , command
     , command'
     , post
+    , postCmd
+    , postCmd'
     , outcome
     , sequel
     , concurringly
@@ -139,13 +141,13 @@ command' = review facet
 post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
 post c = id %= (`DL.snoc` c)
 
--- -- | @'postCmd' = 'post' . 'command'@
--- postCmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
--- postCmd = post . command
+-- | @'postCmd' = 'post' . 'command'@
+postCmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
+postCmd = post . command
 
--- -- | @'postCmd'' = 'post' . 'command''@
--- postCmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
--- postCmd' = post . command'
+-- | @'postCmd'' = 'post' . 'command''@
+postCmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
+postCmd' = post . command'
 
 -- -- | Given a fmap function, convert a command that fires an @a@
 -- -- to a command that fires a cmd, because executors only
@@ -239,11 +241,11 @@ concurringly ::
     , AsConcur cmd
     , MonadCont m
     ) => Concur cmd a -> m a
-concurringly m = sequel $ post . command' . flip fmap m
+concurringly m = sequel $ postCmd' . flip fmap m
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
 concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
-concurringly_ = post . command' . fmap command
+concurringly_ = postCmd' . fmap command
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
     state m = Concur $ Right <$> Strict.state m
@@ -275,7 +277,7 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
             Right a -> runConcur $ k a
             Left ma -> do
                 v <- lift $ MkMVar newEmptyMVar
-                post . command' $ flip fmap (Concur @cmd $ pure (Left ma))
+                postCmd' $ flip fmap (Concur @cmd $ pure (Left ma))
                     (\a -> command' $ flip fmap (k a)
                         (\b -> command' $ command <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v

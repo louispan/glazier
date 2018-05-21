@@ -231,38 +231,38 @@ testEffects = void . runMaybeT . testEffects_ testEffects
 
 ioProgram :: (AsFacet (IOEffect cmd) cmd, AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 ioProgram = do
-    post . command' $ PutStrLn "Write two things"
+    postCmd' $ PutStrLn "Write two things"
     evalContT $ do
         -- Use the continuation monad to compose the function to pass into GetLine
-        a1 <- sequel $ post . command' . GetLine
-        a2 <- sequel $ post . command' . GetLine
+        a1 <- sequel $ postCmd' . GetLine
+        a2 <- sequel $ postCmd' . GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
-            "secret" -> post . command' $ PutStrLn "Easter egg!"
+            "secret" -> postCmd' $ PutStrLn "Easter egg!"
             _ -> do
-                post . command' $ PutStrLn "Write something else"
+                postCmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- sequel $ post . command' . GetLine
-                post . command' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+                b <- sequel $ postCmd' . GetLine
+                postCmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using only concur
 ioProgramWithOnlyConcur ::
     ( AsFacet (IOEffect cmd) cmd
     , AsConcur cmd) => State (DL.DList cmd) ()
 ioProgramWithOnlyConcur = do
-    post . command' $ PutStrLn "Write two things"
+    postCmd' $ PutStrLn "Write two things"
     concurringly_ $ do
         -- Use the Concur monad to batch two GetLines concurrently
-        a1 <- outcome $ post . command' . GetLine
-        a2 <- outcome $ post . command' . GetLine
+        a1 <- outcome $ postCmd' . GetLine
+        a2 <- outcome $ postCmd' . GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
-            "secret" -> post . command' $ PutStrLn "Easter egg!"
+            "secret" -> postCmd' $ PutStrLn "Easter egg!"
             _ -> do
-                post . command' $ PutStrLn "Write something else"
+                postCmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- outcome $ post . command' . GetLine
-                post . command' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+                b <- outcome $ postCmd' . GetLine
+                postCmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using concur & cont together
 ioProgramWithConcur ::
@@ -270,21 +270,21 @@ ioProgramWithConcur ::
     , AsConcur cmd
     , AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 ioProgramWithConcur = do
-    post . command' $ PutStrLn "Write two things"
+    postCmd' $ PutStrLn "Write two things"
     evalContT $ do
         (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
-                a1 <- outcome $ post . command' . GetLine
-                a2 <- outcome $ post . command' . GetLine
+                a1 <- outcome $ postCmd' . GetLine
+                a2 <- outcome $ postCmd' . GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of
-            "secret" -> post . command' $ PutStrLn "Easter egg!"
+            "secret" -> postCmd' $ PutStrLn "Easter egg!"
             _ -> do
-                post . command' $ PutStrLn "Write something else"
+                postCmd' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- sequel $ post . command' . GetLine
-                post . command' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+                b <- sequel $ postCmd' . GetLine
+                postCmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | Program using both effects
 program ::
@@ -292,9 +292,9 @@ program ::
     , AsFacet (IOEffect cmd) cmd
     , AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 program = do
-    post . command $ HelloWorld
+    postCmd $ HelloWorld
     ioProgram
-    post . command $ ByeWorld
+    postCmd $ ByeWorld
 
 main :: IO ()
 main = do
