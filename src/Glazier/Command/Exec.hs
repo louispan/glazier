@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes #-}
+
 module Glazier.Command.Exec where
 
 import Control.Lens
@@ -14,24 +16,17 @@ import qualified UnliftIO.Concurrent as U
 maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> c -> MaybeT m b
 maybeExec k y = MaybeT . sequenceA $ k <$> preview facet y
 
-execConcurCmd ::
+execConcur ::
     MonadUnliftIO m
     => (cmd -> m ())
-    -> ConcurCmd cmd
-    -> m ()
-execConcurCmd exec cmd = do
-    case cmd of
-        (Cmd (Concur m) k) -> do
-            ea <- execConcurCmd_ exec m
-            -- Now run the blocking io, which produces the final command
-            a <- liftIO $ either id pure ea
-            exec (k a)
-        -- (Cmd_ (Concur m)) -> do
-        --     ea <- execConcurCmd_ exec m
-        --     -- Now run the blocking io
-        --     liftIO $ either id pure ea
+    -> Concur cmd a
+    -> m a
+execConcur exec (Concur m) = do
+        ea <- execConcur_ exec
+        -- Now run the possibly blocking io
+        liftIO $ either id pure ea
   where
-    execConcurCmd_ exec' m = do
+    execConcur_ exec' = do
         -- get the list of commands to run
         (ma, cs) <- liftIO $ unMkMVar $ runStateT m mempty
         -- run the batched commands in separate threads

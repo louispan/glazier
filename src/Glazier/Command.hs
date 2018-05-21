@@ -9,30 +9,25 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Command
-    ( Cmd(..)
-    , MonadCodify(..)
+    ( MonadCodify(..)
     , codify'
     , MonadCommand
     , command
     , command'
     , post
-    , postcmd
-    , postcmd'
-    , dispatch
-    , conclude
+    , outcome
+    , sequel
     , concurringly
     , concurringly_
     , AsConcur
-    , ConcurCmd
     , Concur(..)
     , MkMVar -- Hiding constructor
     , unMkMVar
-    , concurCmd
-    , concurCmd_
     ) where
 
 import Control.Applicative
@@ -55,14 +50,6 @@ import qualified Data.DList as DL
 ----------------------------------------------
 -- Command utilties
 ----------------------------------------------
-
--- | Adds a handler to polymorphic commands that produce a value
-data Cmd f cmd where
-    Cmd :: Show (f a) => f a -> (a -> cmd) -> Cmd f cmd
-
-instance Show (Cmd f cmd) where
-    showsPrec p (Cmd f _) = showParen (p >= 11) $
-        showString "Cmd " . shows f
 
 -- | Converts a monad transformer stack with a 'State' of list of commands
 -- to output a single command, using the current monad context,
@@ -123,7 +110,7 @@ instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (MaybeT m) where
 --         go m = do
 --             ea <- m
 --             case ea of
---                 Left e -> postcmd e
+--                 Left e -> postCmd e
 --                 Right () -> pure ()
 
 type MonadCommand cmd m =
@@ -152,55 +139,73 @@ command' = review facet
 post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
 post c = id %= (`DL.snoc` c)
 
--- | @'postcmd' = 'post' . 'command'@
-postcmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
-postcmd = post . command
+-- -- | @'postCmd' = 'post' . 'command'@
+-- postCmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
+-- postCmd = post . command
 
--- | @'postcmd'' = 'post' . 'command''@
-postcmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
-postcmd' = post . command'
+-- -- | @'postCmd'' = 'post' . 'command''@
+-- postCmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
+-- postCmd' = post . command'
+
+-- -- | Given a fmap function, convert a command that fires an @a@
+-- -- to a command that fires a cmd, because executors only
+-- -- know how to interpret @c cmd@
+-- dispatch :: Functor c => c a -> (a -> cmd) -> c cmd
+-- dispatch = flip fmap
+
+-- -- | Convert a command that fires an @()@ to a command that fires a cmd,
+-- -- because executors only know how to interpret @f cmd@
+-- unitCmd :: (Functor c, AsFacet () cmd) => c () -> c cmd
+-- unitCmd = fmap command
+
+-- -- | variation of 'dispatch' for @f cmd :: * -> *@
+-- dispatch' :: Functor (c cmd) => c cmd a -> (a -> cmd) -> c cmd cmd
+-- dispatch' = flip fmap
+
+-- -- | variation of 'unitCmd' for @f cmd :: * -> *@
+-- unitCmd' :: (Functor (c cmd), AsFacet () cmd) => c cmd () -> c cmd cmd
+-- unitCmd' = fmap command
 
 -- | This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
--- 'dispatch' is used inside an 'evalContT' block or 'concurringly'.
+-- 'outcome' is used inside an 'evalContT' block or 'concurringly'.
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
 --
 -- @
 -- If tne input function purely returns a command, you can use:
--- dispatch . (postcmd' .) :: ((a -> cmd) -> c cmd) -> m a
+-- outcome . (postCmd' .) :: ((a -> cmd) -> c cmd) -> m a
 --
 -- If tne input function monnadic returns a command, you can use:
--- dispatch . ((>>= postcmd') .) :: ((a -> cmd) -> m (c cmd)) -> m a
+-- outcome . ((>>= postCmd') .) :: ((a -> cmd) -> m (c cmd)) -> m a
 -- @
-dispatch ::
+outcome ::
     ( MonadDelegate () m
     , MonadCodify cmd m
     )
     => ((a -> cmd) -> m ()) -> m a
-dispatch m = delegate $ \k -> do
+outcome m = delegate $ \k -> do
     f <- codify k
     m f
 
--- | Sequential variation of 'dispatch' that forces the transformer stack to use 'ContT'.
+-- | Sequential variation of 'outcome' that forces the transformer stack to use 'ContT'.
 -- The 'MonadCont' constraint is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack.
--- 'conclude' is used for operations that MUST run sequentially, not concurrently.
-conclude ::
+-- 'sequel' is used for operations that MUST run sequentially, not concurrently.
+sequel ::
     ( MonadDelegate () m
     , MonadCodify cmd m
     , MonadCont m
     )
     => ((a -> cmd) -> m ()) -> m a
-conclude = dispatch
+sequel = outcome
 
 ----------------------------------------------
 -- Batch independant commands
 ----------------------------------------------
 
-type AsConcur cmd = (AsFacet () cmd, AsFacet (ConcurCmd cmd) cmd)
-type ConcurCmd cmd = Cmd (Concur cmd) cmd
+type AsConcur cmd = (AsFacet () cmd, AsFacet (Concur cmd cmd) cmd)
 
 -- | This monad is intended to be used with @ApplicativeDo@ to allow do notation
 -- for composing commands that can be run concurrently.
@@ -228,27 +233,17 @@ newtype MkMVar a = MkMVar (IO a)
 unMkMVar :: MkMVar a -> IO a
 unMkMVar (MkMVar m) = m
 
--- | 'dispatch' can be used inside a 'concurCmd' or 'concurringly' block.
--- 'concurCmd' results in a function (that requires a handler) which may be passed into 'conclude''
-concurCmd :: Concur cmd a -> (a -> cmd) -> ConcurCmd cmd
-concurCmd = Cmd
-
--- | 'dispatch' can be used inside a 'concurCmd_' or 'concurringly_' block.
--- 'concurCmd_' results in a command that doesn't require a handler and may be passed into 'postcmd''.
-concurCmd_ :: AsFacet () cmd => Concur cmd () -> ConcurCmd cmd
-concurCmd_ m = Cmd m command
-
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd a@
 concurringly ::
     ( MonadCommand cmd m
     , AsConcur cmd
     , MonadCont m
     ) => Concur cmd a -> m a
-concurringly m = conclude $ postcmd' . (concurCmd m)
+concurringly m = sequel $ post . command' . flip fmap m
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
 concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
-concurringly_ = postcmd' . concurCmd_
+concurringly_ = post . command' . fmap command
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
     state m = Concur $ Right <$> Strict.state m
@@ -280,15 +275,15 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
             Right a -> runConcur $ k a
             Left ma -> do
                 v <- lift $ MkMVar newEmptyMVar
-                postcmd' $ concurCmd (Concur $ pure (Left ma))
-                    (\a -> command' $ concurCmd (k a)
-                        (\b -> command' $ concurCmd_ (Concur $ pure $ Left $ putMVar v b)))
+                post . command' $ flip fmap (Concur @cmd $ pure (Left ma))
+                    (\a -> command' $ flip fmap (k a)
+                        (\b -> command' $ command <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v
 
 instance AsConcur cmd => MonadCodify cmd (Concur cmd) where
-    codify f = pure $ command' . concurCmd_ . f
+    codify f = pure $ command' . fmap command . f
 
--- | This instance makes usages of 'conclude' concurrent when used
+-- | This instance makes usages of 'sequel' concurrent when used
 -- insdie a 'concurringly' or 'concurringly_' block.
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
