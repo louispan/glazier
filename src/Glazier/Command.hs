@@ -19,6 +19,7 @@ module Glazier.Command
     , MonadCommand
     , command
     , command'
+    , discharge
     , post
     , postCmd
     , postCmd'
@@ -119,6 +120,7 @@ type MonadCommand cmd m =
     ( MonadDelegate () m
     , MonadCodify cmd m
     , MonadState (DL.DList cmd) m
+    , AsFacet [cmd] cmd -- required by State/Concur instances of 'MonadCodify'
     )
 
 -- | convert a request type to a command type.
@@ -134,6 +136,14 @@ command = review facet
 -- Eg. commands that "returns" a value from running an effect.
 command' :: (AsFacet (c cmd) cmd) => c cmd -> cmd
 command' = review facet
+
+-- | A list of @cmd@ is also a command, ie. @AsFacet [cmd] cmd@;
+-- and executors of commands of a results only execute the type @c cmd@,
+-- ie, when the command result in the next @cmd@.
+-- This function is useful to fmap a command with a result of unit
+-- to to a command with a result @cmd@ type.
+discharge :: (AsFacet [cmd] cmd) => () -> cmd
+discharge = command' . const []
 
 -- | Add a command to the list of commands for this MonadState.
 -- I basically want a Writer monad, but I'm using a State monad
@@ -154,19 +164,6 @@ postCmd' = post . command'
 -- -- know how to interpret @c cmd@
 -- dispatch :: Functor c => c a -> (a -> cmd) -> c cmd
 -- dispatch = flip fmap
-
--- -- | Convert a command that fires an @()@ to a command that fires a cmd,
--- -- because executors only know how to interpret @f cmd@
--- unitCmd :: (Functor c, AsFacet () cmd) => c () -> c cmd
--- unitCmd = fmap command
-
--- -- | variation of 'dispatch' for @f cmd :: * -> *@
--- dispatch' :: Functor (c cmd) => c cmd a -> (a -> cmd) -> c cmd cmd
--- dispatch' = flip fmap
-
--- -- | variation of 'unitCmd' for @f cmd :: * -> *@
--- unitCmd' :: (Functor (c cmd), AsFacet () cmd) => c cmd () -> c cmd cmd
--- unitCmd' = fmap command
 
 -- | This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
@@ -207,7 +204,7 @@ sequel = outcome
 -- Batch independant commands
 ----------------------------------------------
 
-type AsConcur cmd = (AsFacet () cmd, AsFacet (Concur cmd cmd) cmd)
+type AsConcur cmd = (AsFacet [cmd] cmd, AsFacet (Concur cmd cmd) cmd)
 
 -- | This monad is intended to be used with @ApplicativeDo@ to allow do notation
 -- for composing commands that can be run concurrently.
@@ -245,7 +242,7 @@ concurringly m = sequel $ postCmd' . flip fmap m
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
 concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
-concurringly_ = postCmd' . fmap command
+concurringly_ = postCmd' . fmap discharge
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
     state m = Concur $ Right <$> Strict.state m
@@ -272,18 +269,18 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
         case m' of
-            -- pure value, no blocking required,
-            -- avoid using MVar.
+            -- pure value, no blocking required, avoid using MVar.
             Right a -> runConcur $ k a
+            -- blocking io, must use MVar
             Left ma -> do
                 v <- lift $ MkMVar newEmptyMVar
                 postCmd' $ flip fmap (Concur @cmd $ pure (Left ma))
                     (\a -> command' $ flip fmap (k a)
-                        (\b -> command' $ command <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
+                        (\b -> command' $ discharge <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v
 
 instance AsConcur cmd => MonadCodify cmd (Concur cmd) where
-    codify f = pure $ command' . fmap command . f
+    codify f = pure $ command' . fmap discharge . f
 
 -- | This instance makes usages of 'sequel' concurrent when used
 -- insdie a 'concurringly' or 'concurringly_' block.

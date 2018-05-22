@@ -103,8 +103,7 @@ execHelloWorldEffect ByeWorld = liftIO $ putStrLn "Bye, world!"
 
 -- | Combine interpreters
 execEffects_ ::
-    ( AsFacet [cmd] cmd
-    , AsFacet (IOEffect cmd) cmd
+    ( AsFacet (IOEffect cmd) cmd
     , AsFacet HelloWorldEffect cmd
     , AsConcur cmd
     , MonadUnliftIO m
@@ -112,15 +111,13 @@ execEffects_ ::
     => (cmd -> m ()) -> cmd -> MaybeT m ()
 execEffects_ exec c =
     maybeExec (traverse_ @[] exec) c
-    <|> maybeExec pure c
     <|> maybeExec ((>>= exec). execConcur exec) c
     <|> maybeExec (execIOEffect exec) c
     <|> maybeExec execHelloWorldEffect c
 
 -- | Tie execEffects_ with itself to get the final interpreter
 execEffects ::
-    ( AsFacet [cmd] cmd
-    , AsFacet (IOEffect cmd) cmd
+    ( AsFacet (IOEffect cmd) cmd
     , AsFacet HelloWorldEffect cmd
     , AsConcur cmd
     , Show cmd
@@ -181,7 +178,6 @@ testEffects_ ::
     , Has (Tagged Output (TVar [String])) r
     , Has (Tagged Input (TVar [String])) r
     , MonadUnliftIO m
-    , AsFacet [cmd] cmd
     , AsFacet (IOEffect cmd) cmd
     , AsFacet HelloWorldEffect cmd
     , AsConcur cmd
@@ -189,7 +185,6 @@ testEffects_ ::
     => (cmd -> m ()) -> cmd -> MaybeT m ()
 testEffects_ exec c =
     maybeExec (traverse_ @[] exec) c
-    <|> maybeExec pure c
     <|> maybeExec ((>>= exec) . execConcur exec) c
     <|> maybeExec (testIOEffect exec) c
     <|> maybeExec testHelloWorldEffect c
@@ -217,7 +212,6 @@ testEffects ::
     , Has (Tagged Output (TVar [String])) r
     , Has (Tagged Input (TVar [String])) r
     , MonadUnliftIO m
-    , AsFacet [cmd] cmd
     , AsFacet (IOEffect cmd) cmd
     , AsFacet HelloWorldEffect cmd
     , AsConcur cmd
@@ -267,13 +261,13 @@ ioProgramWithOnlyConcur = do
 -- | using concur & cont together
 ioProgramWithConcur ::
     ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd
-    , AsFacet [cmd] cmd) => State (DL.DList cmd) ()
+    , AsConcur cmd) => State (DL.DList cmd) ()
 ioProgramWithConcur = do
     postCmd' $ PutStrLn "Write two things"
     evalContT $ do
         (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
+                -- required ApplicativeDo
                 a1 <- outcome $ postCmd' . GetLine
                 a2 <- outcome $ postCmd' . GetLine
                 pure (a1, a2)
