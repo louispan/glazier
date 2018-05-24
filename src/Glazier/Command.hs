@@ -15,16 +15,21 @@
 
 module Glazier.Command
     ( MonadCodify(..)
+    , codify
     , codify'
     , MonadCommand
     , command
     , command'
-    , discharge
+    , command_
+    , commands
     , post
+    , posts
     , postCmd
     , postCmd'
     , outcome
     , sequel
+    , dispatch
+    , dispatch_
     , concurringly
     , concurringly_
     , AsConcur
@@ -49,63 +54,61 @@ import Control.Monad.Trans.State.Lazy as Lazy
 import Control.Monad.Trans.State.Strict as Strict
 import Data.Diverse.Lens
 import qualified Data.DList as DL
+import Data.Semigroup
 
 ----------------------------------------------
 -- Command utilties
 ----------------------------------------------
 
--- | Converts a monad transformer stack with a 'State' of list of commands
--- to output a single command, using the current monad context,
+-- | Converts a handler that result in monad transformer stack with a 'State' of list of commands
+-- to a handler that result in a list of commands, using the current monad context,
 -- by running the State of comands with mempty like Writer.
 class Monad m => MonadCodify cmd m | m -> cmd where
-    codify :: (a -> m ()) -> m (a -> cmd)
+    codifies :: (a -> m ()) -> m (a -> [cmd])
 
-codify' :: MonadCodify cmd m => m () -> m cmd
+-- | Variation of 'codifies' to output a handler that result in a single command
+codify :: (AsFacet [cmd] cmd, MonadCodify cmd m) => (a -> m ()) -> m (a -> cmd)
+codify f = (commands .) <$> codifies f
+
+-- | Variation of 'codify' to transform the monad stack instead of a handler.
+codify' :: (AsFacet [cmd] cmd, MonadCodify cmd m) => m () -> m cmd
 codify' m = do
     f <- codify (const m)
     pure (f ())
 
-instance AsFacet [cmd] cmd => MonadCodify cmd (Strict.State (DL.DList cmd)) where
-    codify f = pure $ \a -> case DL.toList . (`Strict.execState` mempty) $ f a of
-        [x] -> x
-        xs -> command' xs
+instance MonadCodify cmd (Strict.State (DL.DList cmd)) where
+    codifies f = pure $ \a -> DL.toList . (`Strict.execState` mempty) $ f a
 
-instance AsFacet [cmd] cmd => MonadCodify cmd (Strict.AState (DL.DList cmd)) where
-    codify f = pure $ \a -> case DL.toList . (`Strict.execAState` mempty) $ f a of
-        [x] -> x
-        xs -> command' xs
+instance MonadCodify cmd (Strict.AState (DL.DList cmd)) where
+    codifies f = pure $ \a -> DL.toList . (`Strict.execAState` mempty) $ f a
 
-instance AsFacet [cmd] cmd => MonadCodify cmd (Lazy.State (DL.DList cmd)) where
-    codify f = pure $ \a -> case DL.toList . (`Lazy.execState` mempty) $ f a of
-        [x] -> x
-        xs -> command' xs
+instance MonadCodify cmd (Lazy.State (DL.DList cmd)) where
+    codifies f = pure $ \a -> DL.toList . (`Lazy.execState` mempty) $ f a
 
-instance AsFacet [cmd] cmd => MonadCodify cmd (Lazy.AState (DL.DList cmd)) where
-    codify f = pure $ \a -> case DL.toList . (`Lazy.execAState` mempty) $ f a of
-        [x] -> x
-        xs -> command' xs
+instance MonadCodify cmd (Lazy.AState (DL.DList cmd)) where
+    codifies f = pure $ \a -> DL.toList . (`Lazy.execAState` mempty) $ f a
 
 instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (IdentityT m) where
-    codify f = lift . codify $ runIdentityT . f
+    codifies f = lift . codifies $ runIdentityT . f
 
 instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (ContT () m) where
-    codify f = lift . codify $ evalContT . f
+    codifies f = lift . codifies $ evalContT . f
 
 instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (AContT () m) where
-    codify f = lift . codify $ evalAContT . f
+    codifies f = lift . codifies $ evalAContT . f
 
 instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (ReaderT r m) where
-    codify f = do
+    codifies f = do
         r <- ask
-        lift . codify $ (`runReaderT` r) . f
+        lift . codifies $ (`runReaderT` r) . f
 
 instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (AReaderT r m) where
-    codify f = do
+    codifies f = do
         r <- ask
-        lift . codify $ (`runAReaderT` r) . f
+        lift . codifies $ (`runAReaderT` r) . f
 
 instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (MaybeT m) where
-    codify f = lift . codify $ void . runMaybeT . f
+    codifies f = lift . codifies $ void . runMaybeT . f
 
 -- instance (AsFacet e cmd, MonadCodify cmd m, Monad m, MonadState (DL.DList cmd) m) => MonadCodify cmd (ExceptT e m) where
 --     codify f = lift . codify $ go . runExceptT . f
@@ -117,10 +120,10 @@ instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (MaybeT m) where
 --                 Right () -> pure ()
 
 type MonadCommand cmd m =
-    ( MonadDelegate () m
+    ( MonadState (DL.DList cmd) m
+    , MonadDelegate () m
     , MonadCodify cmd m
-    , MonadState (DL.DList cmd) m
-    , AsFacet [cmd] cmd -- required by State/Concur instances of 'MonadCodify'
+    , AsFacet [cmd] cmd
     )
 
 -- | convert a request type to a command type.
@@ -137,19 +140,28 @@ command = review facet
 command' :: (AsFacet (c cmd) cmd) => c cmd -> cmd
 command' = review facet
 
--- | A list of @cmd@ is also a command, ie. @AsFacet [cmd] cmd@;
--- and executors of commands of a results only execute the type @c cmd@,
+-- | This helps allow executors of commands of a results only need to execute the type @c cmd@,
 -- ie, when the command result in the next @cmd@.
 -- This function is useful to fmap a command with a result of unit
--- to to a command with a result @cmd@ type.
-discharge :: (AsFacet [cmd] cmd) => () -> cmd
-discharge = command' . const []
+--  to to a command with a result @cmd@ type.
+command_ :: (AsFacet [cmd] cmd) => () -> cmd
+command_ = command' . const []
+
+-- | Convert a list of commands to a command. This implementation avoids nesting
+-- for lists of a single command.
+commands :: (AsFacet [cmd] cmd) => [cmd] -> cmd
+commands [x] = x
+commands xs = command' xs
 
 -- | Add a command to the list of commands for this MonadState.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
 post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
 post c = id %= (`DL.snoc` c)
+
+-- | Adds a list of commands to the list of commands for this MonadState.
+posts :: (MonadState (DL.DList cmd) m) => [cmd] -> m ()
+posts cs = id %= (<> DL.fromList cs)
 
 -- | @'postCmd' = 'post' . 'command'@
 postCmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
@@ -158,12 +170,6 @@ postCmd = post . command
 -- | @'postCmd'' = 'post' . 'command''@
 postCmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
 postCmd' = post . command'
-
--- -- | Given a fmap function, convert a command that fires an @a@
--- -- to a command that fires a cmd, because executors only
--- -- know how to interpret @c cmd@
--- dispatch :: Functor c => c a -> (a -> cmd) -> c cmd
--- dispatch = flip fmap
 
 -- | This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
@@ -182,6 +188,7 @@ postCmd' = post . command'
 outcome ::
     ( MonadDelegate () m
     , MonadCodify cmd m
+    , AsFacet [cmd] cmd
     )
     => ((a -> cmd) -> m ()) -> m a
 outcome m = delegate $ \k -> do
@@ -192,13 +199,39 @@ outcome m = delegate $ \k -> do
 -- The 'MonadCont' constraint is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack.
 -- 'sequel' is used for operations that MUST run sequentially, not concurrently.
+-- Eg. when the overhead of using 'Concur' 'MVar' is not worth it, or
+-- when data dependencies are not explicitly specified by monadic binds,
+-- Eg. A command to update mutable variable must finish before
+-- a command that reads from the mutable variable.
+-- In this case, the reference to the variable doesn't change, so the
+-- data dependency is not explicit.
 sequel ::
     ( MonadDelegate () m
     , MonadCodify cmd m
     , MonadCont m
+    , AsFacet [cmd] cmd
     )
     => ((a -> cmd) -> m ()) -> m a
 sequel = outcome
+
+-- | Retrieves the result of a functor command.
+dispatch ::
+    ( AsFacet (c cmd) cmd
+    , MonadCommand cmd m
+    , Functor c
+    ) => c a -> m a
+dispatch c = delegate $ \fire -> do
+    fire' <- codify fire
+    postCmd' $ fire' <$> c
+
+-- | Retrieves the result of a functor command.
+dispatch_ ::
+    ( AsFacet (c cmd) cmd
+    , AsFacet [cmd] cmd
+    , MonadState (DL.DList cmd) m
+    , Functor c
+    ) => c () -> m ()
+dispatch_ = postCmd' . fmap command_
 
 ----------------------------------------------
 -- Batch independant commands
@@ -238,11 +271,11 @@ concurringly ::
     , AsConcur cmd
     , MonadCont m
     ) => Concur cmd a -> m a
-concurringly m = sequel $ postCmd' . flip fmap m
+concurringly = dispatch
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
 concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
-concurringly_ = postCmd' . fmap discharge
+concurringly_ = dispatch_
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
     state m = Concur $ Right <$> Strict.state m
@@ -276,11 +309,11 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
                 v <- lift $ MkMVar newEmptyMVar
                 postCmd' $ flip fmap (Concur @cmd $ pure (Left ma))
                     (\a -> command' $ flip fmap (k a)
-                        (\b -> command' $ discharge <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
+                        (\b -> command' $ command_ <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v
 
 instance AsConcur cmd => MonadCodify cmd (Concur cmd) where
-    codify f = pure $ command' . fmap discharge . f
+    codifies f = pure $ pure . command' . fmap command_ . f
 
 -- | This instance makes usages of 'sequel' concurrent when used
 -- insdie a 'concurringly' or 'concurringly_' block.

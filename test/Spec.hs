@@ -143,12 +143,12 @@ testIOEffect ::
     )
     => (cmd -> m ()) -> IOEffect cmd -> m ()
 testIOEffect _ (PutStrLn str) = do
-    xs <- view (itemTag' @Output)
+    xs <- view (pieceTag' @Output)
     liftIO $ atomically $ modifyTVar' xs (\xs' -> ("PutStrLn " <> show str) : xs')
 
 testIOEffect exec (GetLine k) = do
-    xs <- view (itemTag' @Output)
-    ys <- view (itemTag' @Input)
+    xs <- view (pieceTag' @Output)
+    ys <- view (pieceTag' @Input)
     y <- liftIO $ atomically $ do
         ys' <- readTVar ys
         let (y, ys'') = case ys' of
@@ -166,10 +166,10 @@ testHelloWorldEffect ::
     )
     => HelloWorldEffect -> m ()
 testHelloWorldEffect HelloWorld = do
-    xs <- view (itemTag' @Output)
+    xs <- view (pieceTag' @Output)
     liftIO $ atomically $ modifyTVar' xs (\xs' -> "Hello World" : xs')
 testHelloWorldEffect ByeWorld = do
-    xs <- view (itemTag' @Output)
+    xs <- view (pieceTag' @Output)
     liftIO $ atomically $ modifyTVar' xs (\xs' -> "Bye, World" : xs')
 
 -- | Combine test interpreters

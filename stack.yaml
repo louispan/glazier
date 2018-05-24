@@ -44,8 +44,8 @@ packages:
 extra-deps:
 - data-has-0.3.0.0
 - generic-lens-1.0.0.1
-- data-diverse-3.1.0.0
-- data-diverse-lens-3.1.1.0
+- data-diverse-4.0.0.0
+- data-diverse-lens-4.0.0.0
 - newtype-generics-0.5.2.1
 - unliftio-0.2.7.0
 - unliftio-core-0.1.1.0

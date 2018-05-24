@@ -19,8 +19,8 @@ library
                        Glazier.Command.Exec
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 0.2.0.0
-                     , data-diverse >= 3.1
-                     , data-diverse-lens >= 3.1.1
+                     , data-diverse >= 4.0
+                     , data-diverse-lens >= 4.0
                      , dlist >= 0.8
                      , lens >= 4
                      , mtl >= 2
@@ -36,8 +36,8 @@ test-suite glazier-test
   main-is:             Spec.hs
   build-depends:       base >= 4.7 && < 5
                      , glazier
-                     , data-diverse >= 3.1
-                     , data-diverse-lens >= 3.1.1
+                     , data-diverse >= 4.0
+                     , data-diverse-lens >= 4.0
                      , lens >= 4.14
                      , mtl >= 2.2
                      , dlist >= 0.8
