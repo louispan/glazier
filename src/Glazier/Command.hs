@@ -15,6 +15,7 @@
 
 module Glazier.Command
     ( MonadCodify(..)
+    , codifies'
     , codify
     , codify'
     , MonadCommand
@@ -65,6 +66,12 @@ import Data.Semigroup
 -- by running the State of comands with mempty like Writer.
 class Monad m => MonadCodify cmd m | m -> cmd where
     codifies :: (a -> m ()) -> m (a -> [cmd])
+
+-- | Variation of 'codifies' to transform the monad stack instead of a handler.
+codifies' :: (AsFacet [cmd] cmd, MonadCodify cmd m) => m () -> m [cmd]
+codifies' m = do
+    f <- codifies (const m)
+    pure (f ())
 
 -- | Variation of 'codifies' to output a handler that result in a single command
 codify :: (AsFacet [cmd] cmd, MonadCodify cmd m) => (a -> m ()) -> m (a -> cmd)
