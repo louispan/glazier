@@ -33,6 +33,7 @@ module Glazier.Command
     , dispatch_
     , concurringly
     , concurringly_
+    , finished
     , AsConcur
     , Concur(..)
     , MkMVar -- Hiding constructor
@@ -239,6 +240,10 @@ dispatch_ ::
     , Functor c
     ) => c () -> m ()
 dispatch_ = postCmd' . fmap command_
+
+-- | Variation of 'finish' type restrictedt to @Which '[]@
+finished :: MonadDelegate r m => m r -> m (Which '[])
+finished = finish
 
 ----------------------------------------------
 -- Batch independant commands

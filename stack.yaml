@@ -43,7 +43,7 @@ packages:
 # (e.g., acme-missiles-0.3)
 extra-deps:
 - data-has-0.3.0.0
-- data-diverse-4.0.0.0
+- data-diverse-4.1.0.0
 - data-diverse-lens-4.1.0.0
 - newtype-generics-0.5.2.1
 - unliftio-0.2.7.0
