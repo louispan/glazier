@@ -48,6 +48,7 @@ import Control.Monad.Delegate
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Trans.AExcept
+import Control.Monad.Trans.AMaybe
 import Control.Monad.Trans.AReader
 import Control.Monad.Trans.AState.Lazy as Lazy
 import Control.Monad.Trans.AState.Strict as Strict
@@ -71,7 +72,7 @@ class Monad m => MonadCodify cmd m | m -> cmd where
     codifies :: (a -> m ()) -> m (a -> [cmd])
 
 -- | Variation of 'codifies' to transform the monad stack instead of a handler.
-codifies' :: (AsFacet [cmd] cmd, MonadCodify cmd m) => m () -> m [cmd]
+codifies' :: (MonadCodify cmd m) => m () -> m [cmd]
 codifies' m = do
     f <- codifies (const m)
     pure (f ())
@@ -86,41 +87,57 @@ codify' m = do
     f <- codify (const m)
     pure (f ())
 
+-- | Instance that does real work by running the State of commands with mempty.
 instance MonadCodify cmd (Strict.State (DL.DList cmd)) where
     codifies f = pure $ \a -> DL.toList . (`Strict.execState` mempty) $ f a
 
+-- | Instance that does real work by running the 'AState' of commands with mempty.
 instance MonadCodify cmd (Strict.AState (DL.DList cmd)) where
     codifies f = pure $ \a -> DL.toList . (`Strict.execAState` mempty) $ f a
 
+-- | Instance that does real work by running the 'State' of commands with mempty.
 instance MonadCodify cmd (Lazy.State (DL.DList cmd)) where
     codifies f = pure $ \a -> DL.toList . (`Lazy.execState` mempty) $ f a
 
+-- | Instance that does real work by running the 'AState' of commands with mempty.
 instance MonadCodify cmd (Lazy.AState (DL.DList cmd)) where
     codifies f = pure $ \a -> DL.toList . (`Lazy.execAState` mempty) $ f a
 
-instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (IdentityT m) where
+-- | Passthrough instance
+instance MonadCodify cmd m => MonadCodify cmd (IdentityT m) where
     codifies f = lift . codifies $ runIdentityT . f
 
-instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (ContT () m) where
+-- | Passthrough instance
+instance MonadCodify cmd m => MonadCodify cmd (ContT () m) where
     codifies f = lift . codifies $ evalContT . f
 
-instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (AContT () m) where
+-- | Passthrough instance
+instance MonadCodify cmd m => MonadCodify cmd (AContT () m) where
     codifies f = lift . codifies $ evalAContT . f
 
-instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (ReaderT r m) where
+-- | Passthrough instance, using the Reader context
+instance MonadCodify cmd m => MonadCodify cmd (ReaderT r m) where
     codifies f = do
         r <- ask
         lift . codifies $ (`runReaderT` r) . f
 
-instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (AReaderT r m) where
+-- | Passthrough instance, using the Reader context
+instance MonadCodify cmd m => MonadCodify cmd (AReaderT r m) where
     codifies f = do
         r <- ask
         lift . codifies $ (`runAReaderT` r) . f
 
-instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (MaybeT m) where
+-- | Passthrough instance, ignoring that the handler result might be Nothing.
+instance MonadCodify cmd m => MonadCodify cmd (MaybeT m) where
     codifies f = lift . codifies $ void . runMaybeT . f
 
-instance (MonadDelegate () m, MonadCodify cmd m, Monad m) => MonadCodify cmd (ExceptT e m) where
+-- | Passthrough instance, ignoring that the handler result might be Nothing.
+instance MonadCodify cmd m => MonadCodify cmd (AMaybeT m) where
+    codifies f = lift . codifies $ void . runAMaybeT . f
+
+-- | Passthrough instance which requires the inner monad to be a 'MonadDelegate'.
+-- This means that the @Left e@ case can be handled by the provided delegate.
+instance (MonadDelegate () m, MonadCodify cmd m) => MonadCodify cmd (ExceptT e m) where
     codifies f = ExceptT $ delegate $ \kec -> do
         let g a = do
                 e <- runExceptT $ f a
@@ -130,7 +147,9 @@ instance (MonadDelegate () m, MonadCodify cmd m, Monad m) => MonadCodify cmd (Ex
         g' <- codifies g
         kec (Right g')
 
-instance (MonadDelegate () m, MonadCodify cmd m, Monad m) => MonadCodify cmd (AExceptT e m) where
+-- | Passthrough instance which requires the inner monad to be a 'MonadDelegate'.
+-- This means that the @Left e@ case can be handled by the provided delegate.
+instance (MonadDelegate () m, MonadCodify cmd m) => MonadCodify cmd (AExceptT e m) where
     codifies f = aexceptT $ delegate $ \kec -> do
         let g a = do
                 e <- runAExceptT $ f a
