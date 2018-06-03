@@ -47,9 +47,11 @@ import Control.Monad.Cont
 import Control.Monad.Delegate
 import Control.Monad.Reader
 import Control.Monad.State
+import Control.Monad.Trans.AExcept
 import Control.Monad.Trans.AReader
 import Control.Monad.Trans.AState.Lazy as Lazy
 import Control.Monad.Trans.AState.Strict as Strict
+import Control.Monad.Trans.Except
 import Control.Monad.Trans.Identity
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.State.Lazy as Lazy
@@ -118,14 +120,25 @@ instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (AReaderT r m) where
 instance (MonadCodify cmd m, Monad m) => MonadCodify cmd (MaybeT m) where
     codifies f = lift . codifies $ void . runMaybeT . f
 
--- instance (AsFacet e cmd, MonadCodify cmd m, Monad m, MonadState (DL.DList cmd) m) => MonadCodify cmd (ExceptT e m) where
---     codify f = lift . codify $ go . runExceptT . f
---       where
---         go m = do
---             ea <- m
---             case ea of
---                 Left e -> postCmd e
---                 Right () -> pure ()
+instance (MonadDelegate () m, MonadCodify cmd m, Monad m) => MonadCodify cmd (ExceptT e m) where
+    codifies f = ExceptT $ delegate $ \kec -> do
+        let g a = do
+                e <- runExceptT $ f a
+                case e of
+                    Left e' -> kec (Left e')
+                    Right _ -> pure ()
+        g' <- codifies g
+        kec (Right g')
+
+instance (MonadDelegate () m, MonadCodify cmd m, Monad m) => MonadCodify cmd (AExceptT e m) where
+    codifies f = aexceptT $ delegate $ \kec -> do
+        let g a = do
+                e <- runAExceptT $ f a
+                case e of
+                    Left e' -> kec (Left e')
+                    Right _ -> pure ()
+        g' <- codifies g
+        kec (Right g')
 
 type MonadCommand cmd m =
     ( MonadState (DL.DList cmd) m
