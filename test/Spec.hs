@@ -29,7 +29,6 @@ import Control.Monad.Trans.Maybe
 import Data.Diverse.Lens
 import qualified Data.DList as DL
 import Data.Foldable
-import Data.Semigroup
 import Data.Tagged
 import Glazier.Command
 import Glazier.Command.Exec
