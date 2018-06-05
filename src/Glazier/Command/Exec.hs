@@ -28,7 +28,7 @@ execConcur exec (Concur m) = do
   where
     execConcur_ exec' = do
         -- get the list of commands to run
-        (ma, cs) <- liftIO $ unMkMVar $ runStateT m mempty
+        (ma, cs) <- liftIO $ unNewEmptyMVar $ runStateT m mempty
         -- run the batched commands in separate threads
         traverse_ (void . U.forkIO . exec') (DL.toList cs)
         pure ma

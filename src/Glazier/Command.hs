@@ -3,6 +3,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -36,8 +37,8 @@ module Glazier.Command
     , finished
     , AsConcur
     , Concur(..)
-    , MkMVar -- Hiding constructor
-    , unMkMVar
+    , NewEmptyMVar -- Hiding constructor
+    , unNewEmptyMVar
     ) where
 
 import Control.Applicative
@@ -55,6 +56,7 @@ import Control.Monad.Trans.State.Lazy as Lazy
 import Control.Monad.Trans.State.Strict as Strict
 import Data.Diverse.Lens
 import qualified Data.DList as DL
+import GHC.Generics
 
 ----------------------------------------------
 -- Command utilties
@@ -256,19 +258,19 @@ newtype Concur cmd a = Concur
     -- See the instance of 'Monad' for 'Concur'.
     -- Once a blocking IO is returned, then all subsequent binds require another nested MVar.
     -- So it is more efficient to groups of pure binds first before binding with blocking code.
-    { runConcur :: Strict.StateT (DL.DList cmd) MkMVar (Either (IO a) a)
-    }
+    { runConcur :: Strict.StateT (DL.DList cmd) NewEmptyMVar (Either (IO a) a)
+    } deriving (Generic)
 
 instance Show (Concur cmd a) where
     showsPrec _ _ = showString "Concur"
 
--- | NB. Don't export MkMVar constructor to guarantee
+-- | NB. Don't export NewEmptyMVar constructor to guarantee
 -- that that it only contains non-blocking 'newEmptyMVar' IO.
-newtype MkMVar a = MkMVar (IO a)
+newtype NewEmptyMVar a = NewEmptyMVar (IO a)
     deriving (Functor, Applicative, Monad)
 
-unMkMVar :: MkMVar a -> IO a
-unMkMVar (MkMVar m) = m
+unNewEmptyMVar :: NewEmptyMVar a -> IO a
+unNewEmptyMVar (NewEmptyMVar m) = m
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd a@
 concurringly ::
@@ -311,7 +313,7 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
             Right a -> runConcur $ k a
             -- blocking io, must use MVar
             Left ma -> do
-                v <- lift $ MkMVar newEmptyMVar
+                v <- lift $ NewEmptyMVar newEmptyMVar
                 postCmd' $ flip fmap (Concur @cmd $ pure (Left ma))
                     (\a -> command' $ flip fmap (k a)
                         (\b -> command' $ command_ <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
@@ -327,6 +329,6 @@ instance AsConcur cmd => MonadCodify cmd (Concur cmd) where
 -- The Concur monad allows scheduling the command in concurrently with other commands.
 instance AsConcur cmd => MonadDelegate () (Concur cmd) where
     delegate f = Concur $ do
-        v <- lift $ MkMVar newEmptyMVar
+        v <- lift $ NewEmptyMVar newEmptyMVar
         b <- runConcur $ f (\a -> Concur $ lift $ pure $ Left $ putMVar v a)
         pure $ Left (either id pure b *> takeMVar v)
