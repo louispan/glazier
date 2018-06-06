@@ -34,7 +34,6 @@ module Glazier.Command
     , dispatch_
     , concurringly
     , concurringly_
-    , finished
     , AsConcur
     , Concur(..)
     , NewEmptyMVar -- Hiding constructor
@@ -204,7 +203,7 @@ outcome m = delegate $ \k -> do
 -- 'sequel' is used for operations that MUST run sequentially, not concurrently.
 -- Eg. when the overhead of using 'Concur' 'MVar' is not worth it, or
 -- when data dependencies are not explicitly specified by monadic binds,
--- Eg. A command to update mutable variable must finish before
+-- Eg. A command to update mutable variable must exact before
 -- a command that reads from the mutable variable.
 -- In this case, the reference to the variable doesn't change, so the
 -- data dependency is not explicit.
@@ -235,10 +234,6 @@ dispatch_ ::
     , Functor c
     ) => c () -> m ()
 dispatch_ = postCmd' . fmap command_
-
--- | Variation of 'finish' type restrictedt to @Which '[]@
-finished :: MonadDelegate r m => m r -> m (Which '[])
-finished = finish
 
 ----------------------------------------------
 -- Batch independant commands
