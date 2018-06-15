@@ -16,10 +16,8 @@
 -- with the help of ContT and State
 module Main where
 
-import Control.Applicative
 import Control.Concurrent.STM
 import Control.Lens
-import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
 import Control.Monad.Reader
@@ -29,6 +27,7 @@ import Control.Monad.Trans.Maybe
 import Data.Diverse.Lens
 import qualified Data.DList as DL
 import Data.Foldable
+import Data.Proxy
 import Data.Tagged
 import Glazier.Command
 import Glazier.Command.Exec
@@ -78,14 +77,14 @@ instance Show HelloWorldEffect where
     showsPrec _ ByeWorld = showString "ByeWorld"
 
 -- | Define the sum of all variants
-type AppCmd' cmd = Which '[(), [cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect]
+type AppEffects cmd = '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect]
 -- | Add a newtype wrapper to allow recursive definition
-newtype AppCmd = AppCmd { unAppCmd :: AppCmd' AppCmd}
+newtype AppCmd = AppCmd { unAppCmd :: Which (AppEffects AppCmd)}
     deriving Show
 
 -- | Define AsFacet instances for all types in the variant
 -- UndecidableInstances!
-instance (AsFacet a (AppCmd' AppCmd)) => AsFacet a AppCmd where
+instance (AsFacet a (Which (AppEffects AppCmd))) => AsFacet a AppCmd where
     facet = iso unAppCmd AppCmd . facet
 
 ----------------------------------------------
@@ -101,29 +100,21 @@ execHelloWorldEffect HelloWorld = liftIO $ putStrLn "Hello, world!"
 execHelloWorldEffect ByeWorld = liftIO $ putStrLn "Bye, world!"
 
 -- | Combine interpreters
-execEffects_ ::
+execEffects' ::
     ( AsFacet (IOEffect cmd) cmd
     , AsFacet HelloWorldEffect cmd
     , AsConcur cmd
     , MonadUnliftIO m
     )
-    => (cmd -> m ()) -> cmd -> MaybeT m ()
-execEffects_ exec c =
+    => (cmd -> m ()) -> cmd -> MaybeT m (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], ())
+execEffects' exec c =
     maybeExec (traverse_ @[] exec) c
-    <|> maybeExec ((>>= exec). execConcur exec) c
-    <|> maybeExec (execIOEffect exec) c
-    <|> maybeExec execHelloWorldEffect c
+    `orMaybeExec` maybeExec ((>>= exec). execConcur exec) c
+    `orMaybeExec` maybeExec (execIOEffect exec) c
+    `orMaybeExec` maybeExec execHelloWorldEffect c
 
--- | Tie execEffects_ with itself to get the final interpreter
-execEffects ::
-    ( AsFacet (IOEffect cmd) cmd
-    , AsFacet HelloWorldEffect cmd
-    , AsConcur cmd
-    , Show cmd
-    , MonadUnliftIO m
-    )
-    => cmd -> m ()
-execEffects = void . runMaybeT . execEffects_ execEffects
+execEffects :: MonadUnliftIO m => AppCmd -> m ()
+execEffects = verifyExec unAppCmd (fixExec execEffects')
 
 ----------------------------------------------
 -- Test interpreter
@@ -172,7 +163,7 @@ testHelloWorldEffect ByeWorld = do
     liftIO $ atomically $ modifyTVar' xs (\xs' -> "Bye, World" : xs')
 
 -- | Combine test interpreters
-testEffects_ ::
+testEffects' ::
     ( MonadReader r m
     , Has (Tagged Output (TVar [String])) r
     , Has (Tagged Input (TVar [String])) r
@@ -181,29 +172,12 @@ testEffects_ ::
     , AsFacet HelloWorldEffect cmd
     , AsConcur cmd
     )
-    => (cmd -> m ()) -> cmd -> MaybeT m ()
-testEffects_ exec c =
+    => (cmd -> m ()) -> cmd -> MaybeT m (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], ())
+testEffects' exec c =
     maybeExec (traverse_ @[] exec) c
-    <|> maybeExec ((>>= exec) . execConcur exec) c
-    <|> maybeExec (testIOEffect exec) c
-    <|> maybeExec testHelloWorldEffect c
-
--- -- | Combine test interpreters
--- testEffects2_ :: forall m r.
---     ( MonadReader r m
---     , Has (Tagged Output (TVar [String])) r
---     , Has (Tagged Input (TVar [String])) r
---     , MonadUnliftIO m
---     )
---     => (AppCmd -> m ()) -> AppCmd -> m ()
--- testEffects2_ exec (AppCmd c) =
---     switch c (
---         cases ((traverse_ @[] exec :: [AppCmd] -> m ())
---             ./ (execUnit :: () -> m ())
---             ./ (execConcurCmd exec :: ConcurCmd AppCmd -> m ())
---             ./ (testIOEffect exec :: IOEffect AppCmd -> m ())
---             ./ (testHelloWorldEffect :: HelloWorldEffect -> m ())
---             ./ nil))
+    `orMaybeExec` maybeExec ((>>= exec) . execConcur exec) c
+    `orMaybeExec` maybeExec (testIOEffect exec) c
+    `orMaybeExec` maybeExec testHelloWorldEffect c
 
 -- | Tie testEffects_ with itself to get the final interpreter
 testEffects ::
@@ -211,12 +185,8 @@ testEffects ::
     , Has (Tagged Output (TVar [String])) r
     , Has (Tagged Input (TVar [String])) r
     , MonadUnliftIO m
-    , AsFacet (IOEffect cmd) cmd
-    , AsFacet HelloWorldEffect cmd
-    , AsConcur cmd
-    )
-    => cmd -> m ()
-testEffects = void . runMaybeT . testEffects_ testEffects
+    ) => AppCmd -> m ()
+testEffects = verifyExec unAppCmd (fixExec testEffects')
 
 ----------------------------------------------
 -- programs
