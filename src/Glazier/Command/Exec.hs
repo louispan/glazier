@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
+
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
@@ -29,6 +31,7 @@ fixExec fexec = let go = (`evalMaybeT` (Proxy, ())) . fexec (fmap snd . go) in g
 
 -- | Use this function to verify at compile time that the given executor will fullfill
 -- all the variant types in a command type.
+-- redundant-constraints: used to constrain xs and ys
 verifyExec ::
     ( AppendUnique '[] ys ~ ys
     , AppendUnique xs ys ~ xs
@@ -39,6 +42,7 @@ verifyExec ::
 verifyExec _ g = fmap snd .  g
 
 -- | Combines executors, keeping track of the combined list of types handled.
+-- redundant-constraints: used to constrain a''
 orMaybeExec :: (Monad m, a'' ~ Append a a') => MaybeT m (Proxy a, b) -> MaybeT m (Proxy a', b) -> MaybeT m (Proxy a'', b)
 orMaybeExec m n = (\b -> (Proxy, b)) <$> ((snd <$> m) <|> (snd <$> n))
 infixl 3 `orMaybeExec` -- like <|>

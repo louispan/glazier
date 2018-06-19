@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -28,6 +29,7 @@ module Glazier.Command
     , posts
     , postCmd
     , postCmd'
+    , postCmd_
     , outcome
     , sequel
     , dispatch
@@ -56,6 +58,10 @@ import Control.Monad.Trans.State.Strict as Strict
 import Data.Diverse.Lens
 import qualified Data.DList as DL
 import GHC.Generics
+
+#if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
+import Data.Semigroup
+#endif
 
 ----------------------------------------------
 -- Command utilties
@@ -172,6 +178,11 @@ postCmd = post . command
 -- | @'postCmd'' = 'post' . 'command''@
 postCmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
 postCmd' = post . command'
+
+-- | @'postCmd'' = 'post' . 'command''@
+postCmd_ :: (Functor c, MonadState (DL.DList cmd) m, AsFacet [cmd] cmd, AsFacet (c cmd) cmd)
+    => c () -> m ()
+postCmd_ = post . command' . fmap command_
 
 -- | This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.

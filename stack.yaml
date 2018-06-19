@@ -15,7 +15,8 @@
 # resolver:
 #  name: custom-snapshot
 #  location: "./custom-snapshot.yaml"
-resolver: nightly-2018-04-21
+# resolver: nightly-2018-04-21
+resolver: lts-7.19
 # User packages to be built.
 # Various formats can be used as shown in the example below.
 #
@@ -44,7 +45,12 @@ packages:
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
-- data-diverse-4.1.0.0
+- async-2.2.1
+- data-diverse-4.5.0.0
+- data-has-0.3.0.0
+- newtype-generics-0.5.3
+- unliftio-0.2.7.0
+- unliftio-core-0.1.1.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}
