@@ -1,4 +1,5 @@
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
@@ -31,6 +32,10 @@ import Data.Proxy
 import Data.Tagged
 import Glazier.Command
 import Glazier.Command.Exec
+
+#if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
+import Data.Semigroup
+#endif
 
 -- | NB. Data.Diverse imports @Which (xs :: [Type])@
 -- which is a polymorphic variant
@@ -93,7 +98,7 @@ instance (AsFacet a (Which (AppEffects AppCmd))) => AsFacet a AppCmd where
 
 execIOEffect :: MonadIO m => (cmd -> m ()) -> IOEffect cmd -> m ()
 execIOEffect _ (PutStrLn str) = liftIO $ putStrLn str
-execIOEffect exec (GetLine k) = liftIO getLine >>= exec . k
+execIOEffect executor (GetLine k) = liftIO getLine >>= executor . k
 
 execHelloWorldEffect :: MonadIO m => HelloWorldEffect -> m ()
 execHelloWorldEffect HelloWorld = liftIO $ putStrLn "Hello, world!"
@@ -107,10 +112,10 @@ execEffects' ::
     , MonadUnliftIO m
     )
     => (cmd -> m ()) -> cmd -> MaybeT m (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], ())
-execEffects' exec c =
-    maybeExec (traverse_ @[] exec) c
-    `orMaybeExec` maybeExec ((>>= exec). execConcur exec) c
-    `orMaybeExec` maybeExec (execIOEffect exec) c
+execEffects' executor c =
+    maybeExec (traverse_ @[] executor) c
+    `orMaybeExec` maybeExec ((>>= executor). execConcur executor) c
+    `orMaybeExec` maybeExec (execIOEffect executor) c
     `orMaybeExec` maybeExec execHelloWorldEffect c
 
 execEffects :: MonadUnliftIO m => AppCmd -> m ()
@@ -136,7 +141,7 @@ testIOEffect _ (PutStrLn str) = do
     xs <- view (pieceTag' @Output)
     liftIO $ atomically $ modifyTVar' xs (\xs' -> ("PutStrLn " <> show str) : xs')
 
-testIOEffect exec (GetLine k) = do
+testIOEffect executor (GetLine k) = do
     xs <- view (pieceTag' @Output)
     ys <- view (pieceTag' @Input)
     y <- liftIO $ atomically $ do
@@ -147,7 +152,7 @@ testIOEffect exec (GetLine k) = do
         writeTVar ys ys''
         modifyTVar' xs (\xs' -> show y <> " <- GetLine" : xs')
         pure y
-    exec $ k y
+    executor $ k y
 
 testHelloWorldEffect ::
     ( MonadReader r m
@@ -173,10 +178,10 @@ testEffects' ::
     , AsConcur cmd
     )
     => (cmd -> m ()) -> cmd -> MaybeT m (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], ())
-testEffects' exec c =
-    maybeExec (traverse_ @[] exec) c
-    `orMaybeExec` maybeExec ((>>= exec) . execConcur exec) c
-    `orMaybeExec` maybeExec (testIOEffect exec) c
+testEffects' executor c =
+    maybeExec (traverse_ @[] executor) c
+    `orMaybeExec` maybeExec ((>>= executor) . execConcur executor) c
+    `orMaybeExec` maybeExec (testIOEffect executor) c
     `orMaybeExec` maybeExec testHelloWorldEffect c
 
 -- | Tie testEffects_ with itself to get the final interpreter
@@ -194,60 +199,62 @@ testEffects = verifyExec unAppCmd (fixExec testEffects')
 
 ioProgram :: (AsFacet (IOEffect cmd) cmd, AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 ioProgram = do
-    postCmd' $ PutStrLn "Write two things"
+    exec' $ PutStrLn "Write two things"
     evalContT $ do
         -- Use the continuation monad to compose the function to pass into GetLine
-        a1 <- sequel $ postCmd' . GetLine
-        a2 <- sequel $ postCmd' . GetLine
+        a1 <- sequentially . eval' $ GetLine
+        a2 <- sequentially . eval' $ GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
-            "secret" -> postCmd' $ PutStrLn "Easter egg!"
+            "secret" -> exec' $ PutStrLn "Easter egg!"
             _ -> do
-                postCmd' $ PutStrLn "Write something else"
+                exec' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- sequel $ postCmd' . GetLine
-                postCmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+                b <- sequentially . eval' $ GetLine
+                exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using only concur
 ioProgramWithOnlyConcur ::
     ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd) => State (DL.DList cmd) ()
+    , AsConcur cmd
+    -- , MonadCommand cmd m
+    ) => State (DL.DList cmd) ()
 ioProgramWithOnlyConcur = do
-    postCmd' $ PutStrLn "Write two things"
+    exec' $ PutStrLn "Write two things"
     concurringly_ $ do
         -- Use the Concur monad to batch two GetLines concurrently
-        a1 <- outcome $ postCmd' . GetLine
-        a2 <- outcome $ postCmd' . GetLine
+        a1 <- eval' $ GetLine
+        a2 <- eval' $ GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
-            "secret" -> postCmd' $ PutStrLn "Easter egg!"
+            "secret" -> exec' $ PutStrLn "Easter egg!"
             _ -> do
-                postCmd' $ PutStrLn "Write something else"
+                exec' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- outcome $ postCmd' . GetLine
-                postCmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+                b <- eval' $ GetLine
+                exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using concur & cont together
 ioProgramWithConcur ::
     ( AsFacet (IOEffect cmd) cmd
     , AsConcur cmd) => State (DL.DList cmd) ()
 ioProgramWithConcur = do
-    postCmd' $ PutStrLn "Write two things"
+    exec' $ PutStrLn "Write two things"
     evalContT $ do
         (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
                 -- required ApplicativeDo
-                a1 <- outcome $ postCmd' . GetLine
-                a2 <- outcome $ postCmd' . GetLine
+                a1 <- eval' $ GetLine
+                a2 <- eval' $ GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of
-            "secret" -> postCmd' $ PutStrLn "Easter egg!"
+            "secret" -> exec' $ PutStrLn "Easter egg!"
             _ -> do
-                postCmd' $ PutStrLn "Write something else"
+                exec' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- sequel $ postCmd' . GetLine
-                postCmd' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+                b <- sequentially . eval' $ GetLine
+                exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | Program using both effects
 program ::
@@ -255,9 +262,9 @@ program ::
     , AsFacet (IOEffect cmd) cmd
     , AsFacet [cmd] cmd) => State (DL.DList cmd) ()
 program = do
-    postCmd $ HelloWorld
+    exec $ HelloWorld
     ioProgram
-    postCmd $ ByeWorld
+    exec $ ByeWorld
 
 main :: IO ()
 main = do

@@ -25,13 +25,14 @@ module Glazier.Command
     , command'
     , command_
     , commands
-    , post
-    , posts
-    , postCmd
-    , postCmd'
-    , postCmd_
-    , outcome
-    , sequel
+    , instruct
+    , instructs
+    , exec
+    , exec'
+    , exec_
+    , eval
+    , eval'
+    , sequentially
     , dispatch
     , dispatch_
     , concurringly
@@ -164,68 +165,77 @@ commands xs = command' xs
 -- | Add a command to the list of commands for this MonadState.
 -- I basically want a Writer monad, but I'm using a State monad
 -- because but I also want to use it inside a ContT which only has an instance of MonadState.
-post :: (MonadState (DL.DList cmd) m) => cmd -> m ()
-post c = id %= (`DL.snoc` c)
+instruct :: (MonadState (DL.DList cmd) m) => cmd -> m ()
+instruct c = id %= (`DL.snoc` c)
 
 -- | Adds a list of commands to the list of commands for this MonadState.
-posts :: (MonadState (DL.DList cmd) m) => [cmd] -> m ()
-posts cs = id %= (<> DL.fromList cs)
+instructs :: (MonadState (DL.DList cmd) m) => [cmd] -> m ()
+instructs cs = id %= (<> DL.fromList cs)
 
--- | @'postCmd' = 'post' . 'command'@
-postCmd :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
-postCmd = post . command
+-- | @'exec' = 'instruct' . 'command'@
+exec :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
+exec = instruct . command
 
--- | @'postCmd'' = 'post' . 'command''@
-postCmd' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
-postCmd' = post . command'
+-- | @'exec'' = 'instruct' . 'command''@
+exec' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
+exec' = instruct . command'
 
--- | @'postCmd'' = 'post' . 'command''@
-postCmd_ :: (Functor c, MonadState (DL.DList cmd) m, AsFacet [cmd] cmd, AsFacet (c cmd) cmd)
+-- | @'exec'' = 'instruct' . 'command''@
+exec_ :: (Functor c, MonadState (DL.DList cmd) m, AsFacet [cmd] cmd, AsFacet (c cmd) cmd)
     => c () -> m ()
-postCmd_ = post . command' . fmap command_
+exec_ = instruct . command' . fmap command_
 
 -- | This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
--- 'outcome' is used inside an 'evalContT' block or 'concurringly'.
+-- 'eval_' is used inside an 'evalContT' block or 'concurringly'.
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
 --
 -- @
 -- If tne input function purely returns a command, you can use:
--- outcome . (postCmd' .) :: ((a -> cmd) -> c cmd) -> m a
+-- eval_ . (exec' .) :: ((a -> cmd) -> c cmd) -> m a
 --
 -- If tne input function monnadic returns a command, you can use:
--- outcome . ((>>= postCmd') .) :: ((a -> cmd) -> m (c cmd)) -> m a
+-- eval_ . ((>>= exec') .) :: ((a -> cmd) -> m (c cmd)) -> m a
 -- @
-outcome ::
+eval_ ::
     ( MonadDelegate () m
     , MonadCodify cmd m
     , AsFacet [cmd] cmd
     )
     => ((a -> cmd) -> m ()) -> m a
-outcome m = delegate $ \k -> do
+eval_ m = delegate $ \k -> do
     f <- codify k
     m f
 
--- | Sequential variation of 'outcome' that forces the transformer stack to use 'ContT'.
--- The 'MonadCont' constraint is redundant but rules out
+eval' ::
+    ( MonadCommand cmd m
+    , AsFacet [cmd] cmd
+    , AsFacet (c cmd) cmd
+    )
+    => ((a -> cmd) -> c cmd) -> m a
+eval' k = eval_ $ exec' . k
+
+eval ::
+    ( MonadCommand cmd m
+    , AsFacet [cmd] cmd
+    , AsFacet c cmd
+    )
+    => ((a -> cmd) -> c) -> m a
+eval k = eval_ $ exec . k
+
+-- | Adds a 'MonadCont' constraint. It is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack.
--- 'sequel' is used for operations that MUST run sequentially, not concurrently.
+-- 'sequentially' is used for operations that MUST run sequentially, not concurrently.
 -- Eg. when the overhead of using 'Concur' 'MVar' is not worth it, or
 -- when data dependencies are not explicitly specified by monadic binds,
 -- Eg. A command to update mutable variable must exact before
 -- a command that reads from the mutable variable.
 -- In this case, the reference to the variable doesn't change, so the
 -- data dependency is not explicit.
-sequel ::
-    ( MonadDelegate () m
-    , MonadCodify cmd m
-    , MonadCont m
-    , AsFacet [cmd] cmd
-    )
-    => ((a -> cmd) -> m ()) -> m a
-sequel = outcome
+sequentially :: MonadCont m => m a -> m a
+sequentially = id
 
 -- | Retrieves the result of a functor command.
 dispatch ::
@@ -235,16 +245,17 @@ dispatch ::
     ) => c a -> m a
 dispatch c = delegate $ \fire -> do
     fire' <- codify fire
-    postCmd' $ fire' <$> c
+    exec' $ fire' <$> c
 
 -- | Retrieves the result of a functor command.
+-- A simpler variation of 'dispatch' that only requires a @MonadState (DL.DList cmd) m@
 dispatch_ ::
     ( AsFacet (c cmd) cmd
     , AsFacet [cmd] cmd
     , MonadState (DL.DList cmd) m
     , Functor c
     ) => c () -> m ()
-dispatch_ = postCmd' . fmap command_
+dispatch_ = exec' . fmap command_
 
 ----------------------------------------------
 -- Batch independant commands
@@ -282,11 +293,12 @@ unNewEmptyMVar (NewEmptyMVar m) = m
 concurringly ::
     ( MonadCommand cmd m
     , AsConcur cmd
-    , MonadCont m
+    -- , MonadCont m
     ) => Concur cmd a -> m a
 concurringly = dispatch
 
--- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
+-- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
+-- A simpler variation of 'concurringly' that only requires a @MonadState (DL.DList cmd) m@
 concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
 concurringly_ = dispatch_
 
@@ -320,7 +332,7 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
             -- blocking io, must use MVar
             Left ma -> do
                 v <- lift $ NewEmptyMVar newEmptyMVar
-                postCmd' $ flip fmap (Concur @cmd $ pure (Left ma))
+                exec' $ flip fmap (Concur @cmd $ pure (Left ma))
                     (\a -> command' $ flip fmap (k a)
                         (\b -> command' $ command_ <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v
