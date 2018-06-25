@@ -52,14 +52,14 @@ execConcur ::
     => (cmd -> m ())
     -> Concur cmd a
     -> m a
-execConcur exec (Concur m) = do
-        ea <- execConcur_ exec
+execConcur executor (Concur m) = do
+        ea <- execConcur_ executor
         -- Now run the possibly blocking io
         liftIO $ either id pure ea
   where
-    execConcur_ exec' = do
+    execConcur_ executor' = do
         -- get the list of commands to run
         (ma, cs) <- liftIO $ unNewEmptyMVar $ runStateT m mempty
         -- run the batched commands in separate threads
-        traverse_ (void . U.forkIO . exec') (DL.toList cs)
+        traverse_ (void . U.forkIO . executor') (DL.toList cs)
         pure ma
