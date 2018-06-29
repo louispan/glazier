@@ -4,9 +4,13 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Glazier.Command.Exec where
 
+import Data.Kind
 import Control.Applicative
 import Control.Lens
 import Control.Monad.IO.Unlift
@@ -19,6 +23,19 @@ import Data.Foldable
 import Data.Proxy
 import Glazier.Command
 import qualified UnliftIO.Concurrent as U
+
+-- | type function to get the list of effects in a @c@, parameterized over @cmd@
+type family CmdTypes c cmd :: [Type]
+
+-- | A command type that removes the @IO cmd@ from the @CmdTypes@ of the input @cmd@
+newtype NoIOCmd cmd = NoIOCmd { unNoIOCmd :: Which (CmdTypes (NoIOCmd cmd) (NoIOCmd cmd)) }
+
+-- | Removes the @IO cmd@ from the @CmdTypes@ of the input @c@
+type instance CmdTypes (NoIOCmd c) cmd = Remove (IO cmd) (CmdTypes c cmd)
+
+-- UndecidableInstances!
+instance (AsFacet a (Which (CmdTypes (NoIOCmd cmd) (NoIOCmd cmd)))) => AsFacet a (NoIOCmd cmd) where
+    facet = iso unNoIOCmd NoIOCmd . facet
 
 -- | Create an executor for a variant in the command type.
 -- returns a 'Proxy' to keep track of the the types handled by the executor.
@@ -40,6 +57,16 @@ verifyExec ::
     )
     => (cmd -> Which xs) -> (cmd -> m (Proxy ys, b)) -> (cmd -> m b)
 verifyExec _ g = fmap snd .  g
+
+-- 'verifyExec' and 'fixExec' an executor.
+verifyFixExec ::
+    ( AppendUnique '[] ys ~ ys
+    , AppendUnique xs ys ~ xs
+    , AppendUnique ys xs ~ ys
+    , Functor m
+    , Functor m
+    ) => (cmd -> Which xs) -> ((cmd -> m ()) -> cmd -> MaybeT m (Proxy ys, ())) -> cmd -> m ()
+verifyFixExec unCmd maybeExecuteCmd = verifyExec unCmd (fixExec maybeExecuteCmd)
 
 -- | Combines executors, keeping track of the combined list of types handled.
 -- redundant-constraints: used to constrain a''
