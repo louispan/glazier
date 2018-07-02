@@ -1,7 +1,7 @@
 name:                glazier
 version:             1.0.0.0
-synopsis:            Framework for composing effects using ContT, State and variants.
-description:         Framework for composing effects using ContT, State and variants.
+synopsis:            Extensible effects using ContT, State and variants.
+description:         Interpreting commmands with extensible effects using Cont/Concur monad, State, and variants.
 homepage:            https://github.com/louispan/glazier#readme
 license:             BSD3
 license-file:        LICENSE
