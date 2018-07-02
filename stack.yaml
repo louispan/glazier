@@ -37,16 +37,16 @@ resolver: lts-7.19
 # will not be run. This is useful for tweaking upstream packages.
 packages:
 - '.'
-- location: '/Users/louis/repo/hs/alternators'
-  extra-dep: true
-- location: '/Users/louis/repo/hs/data-diverse-lens'
-  extra-dep: true
 
 # Dependency packages to be pulled from upstream that are not in the resolver
 # (e.g., acme-missiles-0.3)
 extra-deps:
+# - git: git@github.com:ghcjs/ghcjs-base.git
+#   commit: b4a8d578758613e5c7db88891f444ff5e6f3edb9
+- alternators-1.0.0.0
+- data-diverse-4.6.0.0
+- data-diverse-4.3.0.0
 - async-2.2.1
-- data-diverse-4.5.0.0
 - data-has-0.3.0.0
 - newtype-generics-0.5.3
 - unliftio-0.2.7.0
