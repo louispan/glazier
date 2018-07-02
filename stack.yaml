@@ -45,7 +45,7 @@ extra-deps:
 #   commit: b4a8d578758613e5c7db88891f444ff5e6f3edb9
 - alternators-1.0.0.0
 - data-diverse-4.6.0.0
-- data-diverse-4.3.0.0
+- data-diverse-lens-4.3.0.0
 - async-2.2.1
 - data-has-0.3.0.0
 - newtype-generics-0.5.3
