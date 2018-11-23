@@ -44,7 +44,22 @@ maybeExec k c = MaybeT . sequenceA $ (fmap (\b -> (Proxy, b)) . k) <$> preview f
 
 -- | Tie an executor with itself to get the final interpreter
 fixExec :: Functor m => ((cmd -> m ()) -> cmd -> MaybeT m (Proxy cmds, ())) -> cmd -> m (Proxy cmds, ())
-fixExec fexec = let go = (`evalMaybeT` (Proxy, ())) . fexec (fmap snd . go) in go
+fixExec fexec = (`evalMaybeT` (Proxy, ())) . fexec (fmap snd . fixExec fexec)
+
+-- | A variation of 'fixExec' for executors that return cmds that should be evaluated last
+fixExec' :: Monad m => ((cmd -> m ()) -> cmd -> MaybeT m (Proxy cmds, [cmd])) -> cmd -> m (Proxy cmds, ())
+fixExec' fexec cmd = do
+    let go = (`evalMaybeT` []) . fmap snd . fexec (fmap snd . fixExec' fexec)
+        gos cs = do
+            case cs of
+                [] -> pure ()
+                cs' -> do
+                    cs'' <- (DL.concat . (fmap DL.fromList)) <$> traverse go cs'
+                    gos $ DL.toList cs''
+    cs <- go cmd
+    gos cs
+    pure (Proxy, ())
+
 
 -- | Use this function to verify at compile time that the given executor will fullfill
 -- all the variant types in a command type.
@@ -59,14 +74,22 @@ verifyExec ::
 verifyExec _ g = fmap snd .  g
 
 -- 'verifyExec' and 'fixExec' an executor.
-verifyFixExec ::
+verifyAndFixExec ::
     ( AppendUnique '[] ys ~ ys
     , AppendUnique xs ys ~ xs
     , AppendUnique ys xs ~ ys
     , Functor m
-    , Functor m
     ) => (cmd -> Which xs) -> ((cmd -> m ()) -> cmd -> MaybeT m (Proxy ys, ())) -> cmd -> m ()
-verifyFixExec unCmd maybeExecuteCmd = verifyExec unCmd (fixExec maybeExecuteCmd)
+verifyAndFixExec unCmd maybeExecuteCmd = verifyExec unCmd (fixExec maybeExecuteCmd)
+
+-- 'verifyExec' and 'fixExec'' an executor.
+verifyAndFixExec' ::
+    ( AppendUnique '[] ys ~ ys
+    , AppendUnique xs ys ~ xs
+    , AppendUnique ys xs ~ ys
+    , Monad m
+    ) => (cmd -> Which xs) -> ((cmd -> m ()) -> cmd -> MaybeT m (Proxy ys, [cmd])) -> cmd -> m ()
+verifyAndFixExec' unCmd maybeExecuteCmd = verifyExec unCmd (fixExec' maybeExecuteCmd)
 
 -- | Combines executors, keeping track of the combined list of types handled.
 -- redundant-constraints: used to constrain a''
