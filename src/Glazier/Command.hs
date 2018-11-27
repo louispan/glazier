@@ -20,6 +20,7 @@ module Glazier.Command
     , codifies'
     , codify
     , codify'
+    , HasCommands(..)
     , MonadCommand
     , command
     , command'
@@ -58,7 +59,7 @@ import Control.Monad.Trans.State.Lazy as Lazy
 import Control.Monad.Trans.State.Strict as Strict
 import Data.Diverse.Lens
 import qualified Data.DList as DL
-import GHC.Generics
+import qualified GHC.Generics as G
 
 #if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
 import Data.Semigroup
@@ -70,7 +71,7 @@ import Data.Semigroup
 
 -- | Converts a handler that result in monad transformer stack with a 'State' of list of commands
 -- to a handler that result in a list of commands, using the current monad context,
--- by running the State of comands with mempty like Writer.
+-- by running the State of commands with mempty like Writer.
 class Monad m => MonadCodify cmd m | m -> cmd where
     codifies :: (a -> m ()) -> m (a -> [cmd])
 
@@ -90,13 +91,34 @@ codify' m = do
     f <- codify (const m)
     pure (f ())
 
+class HasCommands cmd s | s -> cmd where
+    _commands :: Lens' s (DL.DList cmd)
+
+-- | Not providing an instance for plain [List]
+-- because the likely use case has a lot of appends which will be slow.
+instance HasCommands cmd (DL.DList cmd) where
+    _commands = id
+
+instance HasCommands cmd s => HasCommands cmd (s, t) where
+    _commands = _1._commands
+
 -- | Instance that does real work by running the State of commands with mempty.
-instance MonadCodify cmd (Strict.State (DL.DList cmd)) where
-    codifies f = pure $ \a -> DL.toList . (`Strict.execState` mempty) $ f a
+-- Essentially a Writer monad, but using a State monad so it can be
+-- used inside a ContT which only has an instance for MonadState.
+instance (Monoid s, HasCommands cmd s) => MonadCodify cmd (Strict.State s) where
+    codifies f = do
+        s <- Strict.get
+        let s' = s & _commands .~ mempty
+        pure $ \a -> view (_commands.to DL.toList) . (`Strict.execState` s') $ f a
 
 -- | Instance that does real work by running the 'State' of commands with mempty.
-instance MonadCodify cmd (Lazy.State (DL.DList cmd)) where
-    codifies f = pure $ \a -> DL.toList . (`Lazy.execState` mempty) $ f a
+-- Essentially a Writer monad, but using a State monad so it can be
+-- used inside a ContT which only has an instance for MonadState.
+instance (Monoid s, HasCommands cmd s) => MonadCodify cmd (Lazy.State s) where
+    codifies f = do
+        s <- Lazy.get
+        let s' = s & _commands .~ mempty
+        pure $ \a -> view (_commands.to DL.toList) . (`Lazy.execState` s') $ f a
 
 -- | Passthrough instance
 instance MonadCodify cmd m => MonadCodify cmd (IdentityT m) where
@@ -128,8 +150,9 @@ instance (MonadDelegate () m, MonadCodify cmd m) => MonadCodify cmd (ExceptT e m
         g' <- codifies g
         kec (Right g')
 
-type MonadCommand cmd m =
-    ( MonadState (DL.DList cmd) m
+type MonadCommand cmd m s =
+    ( MonadState s m
+    , HasCommands cmd s
     , MonadDelegate () m
     , MonadCodify cmd m
     , AsFacet [cmd] cmd
@@ -163,25 +186,23 @@ commands [x] = x
 commands xs = command' xs
 
 -- | Add a command to the list of commands for this MonadState.
--- I basically want a Writer monad, but I'm using a State monad
--- because but I also want to use it inside a ContT which only has an instance of MonadState.
-instruct :: (MonadState (DL.DList cmd) m) => cmd -> m ()
-instruct c = id %= (`DL.snoc` c)
+instruct :: (HasCommands cmd s, MonadState s m) => cmd -> m ()
+instruct c = _commands %= (`DL.snoc` c)
 
 -- | Adds a list of commands to the list of commands for this MonadState.
-instructs :: (MonadState (DL.DList cmd) m) => [cmd] -> m ()
-instructs cs = id %= (<> DL.fromList cs)
+instructs :: (HasCommands cmd s, MonadState s m) => [cmd] -> m ()
+instructs cs = _commands %= (<> DL.fromList cs)
 
 -- | @'exec' = 'instruct' . 'command'@
-exec :: (MonadState (DL.DList cmd) m, AsFacet c cmd) => c -> m ()
+exec :: (HasCommands cmd s, MonadState s m, AsFacet c cmd) => c -> m ()
 exec = instruct . command
 
 -- | @'exec'' = 'instruct' . 'command''@
-exec' :: (MonadState (DL.DList cmd) m, AsFacet (c cmd) cmd) => c cmd -> m ()
+exec' :: (HasCommands cmd s, MonadState s m, AsFacet (c cmd) cmd) => c cmd -> m ()
 exec' = instruct . command'
 
 -- | @'exec'' = 'instruct' . 'command''@
-exec_ :: (Functor c, MonadState (DL.DList cmd) m, AsFacet [cmd] cmd, AsFacet (c cmd) cmd)
+exec_ :: (Functor c, HasCommands cmd s, MonadState s m, AsFacet [cmd] cmd, AsFacet (c cmd) cmd)
     => c () -> m ()
 exec_ = instruct . command' . fmap command_
 
@@ -210,7 +231,7 @@ eval_ m = delegate $ \k -> do
     m f
 
 eval' ::
-    ( MonadCommand cmd m
+    ( MonadCommand cmd m s
     , AsFacet [cmd] cmd
     , AsFacet (c cmd) cmd
     )
@@ -218,7 +239,7 @@ eval' ::
 eval' k = eval_ $ exec' . k
 
 eval ::
-    ( MonadCommand cmd m
+    ( MonadCommand cmd m s
     , AsFacet [cmd] cmd
     , AsFacet c cmd
     )
@@ -240,7 +261,7 @@ sequentially = id
 -- | Retrieves the result of a functor command.
 dispatch ::
     ( AsFacet (c cmd) cmd
-    , MonadCommand cmd m
+    , MonadCommand cmd m s
     , Functor c
     ) => c a -> m a
 dispatch c = delegate $ \fire -> do
@@ -248,11 +269,12 @@ dispatch c = delegate $ \fire -> do
     exec' $ fire' <$> c
 
 -- | Retrieves the result of a functor command.
--- A simpler variation of 'dispatch' that only requires a @MonadState (DL.DList cmd) m@
+-- A simpler variation of 'dispatch' that only requires a @MonadState s m@
 dispatch_ ::
     ( AsFacet (c cmd) cmd
     , AsFacet [cmd] cmd
-    , MonadState (DL.DList cmd) m
+    , HasCommands cmd s
+    , MonadState s m
     , Functor c
     ) => c () -> m ()
 dispatch_ = exec' . fmap command_
@@ -276,7 +298,7 @@ newtype Concur cmd a = Concur
     -- Once a blocking IO is returned, then all subsequent binds require another nested MVar.
     -- So it is more efficient to groups of pure binds first before binding with blocking code.
     { runConcur :: Strict.StateT (DL.DList cmd) NewEmptyMVar (Either (IO a) a)
-    } deriving (Generic)
+    } deriving (G.Generic)
 
 instance Show (Concur cmd a) where
     showsPrec _ _ = showString "Concur"
@@ -291,7 +313,7 @@ unNewEmptyMVar (NewEmptyMVar m) = m
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd a@
 concurringly ::
-    ( MonadCommand cmd m
+    ( MonadCommand cmd m s
     , AsConcur cmd
     -- , MonadCont m
     ) => Concur cmd a -> m a
@@ -299,7 +321,7 @@ concurringly = dispatch
 
 -- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
 -- A simpler variation of 'concurringly' that only requires a @MonadState (DL.DList cmd) m@
-concurringly_ :: (MonadState (DL.DList cmd) m, AsConcur cmd) => Concur cmd () -> m ()
+concurringly_ :: (HasCommands cmd s, MonadState s m, AsConcur cmd) => Concur cmd () -> m ()
 concurringly_ = dispatch_
 
 instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
@@ -333,8 +355,10 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
             Left ma -> do
                 v <- lift $ NewEmptyMVar newEmptyMVar
                 exec' $ flip fmap (Concur @cmd $ pure (Left ma))
-                    (\a -> command' $ flip fmap (k a)
-                        (\b -> command' $ command_ <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
+                    (\a -> command' $ flip fmap (k a)  -- convert Concur cmd cmd to a cmd
+                        (\b -> command' -- convert Concur cmd cmd to a cmd
+                            -- Concur cmd cmd
+                            $ command_ <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v
 
 instance AsConcur cmd => MonadCodify cmd (Concur cmd) where
