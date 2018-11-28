@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   exposed-modules:     Glazier.Command
                        Glazier.Command.Exec
+                       Glazier.Command.Internal
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 1.0
                      , data-diverse >= 4.6
