@@ -20,6 +20,8 @@ module Glazier.Command
     , codifies'
     , codify
     , codify'
+    , InstructT(..)
+    , Instruct
     , MonadCommand
     , command
     , command'
@@ -92,6 +94,10 @@ codify' m = do
     f <- codify (const m)
     pure (f ())
 
+newtype InstructT cmd m a = InstructT { runInstructT :: Strict.StateT (DL.DList cmd) m a }
+    deriving (Functor, Applicative, Monad, MonadTrans)
+
+type Instruct cmd = InstructT cmd Identity
 
 class Monad m => MonadInstruct cmd m | m -> cmd where
     -- | Add a command to the list of commands.
@@ -105,44 +111,40 @@ class Monad m => MonadInstruct cmd m | m -> cmd where
 -- | Instance that does real work by running the State of commands with mempty.
 -- Essentially a Writer monad, but using a State monad so it can be
 -- used inside a ContT which only has an instance for MonadState.
-instance MonadCodify cmd (Strict.State (DL.DList cmd)) where
-    codifies f = pure $ DL.toList . (`Strict.execState` mempty) . f
+instance MonadCodify cmd (Instruct cmd) where
+    codifies f = pure $ DL.toList . (`Strict.execState` mempty) . runInstructT . f
 
-instance {-# OVERLAPPING #-} MonadInstruct cmd (Strict.State (DL.DList cmd)) where
-    instruct c = Strict.modify' (`DL.snoc` c)
-    instructs cs = Strict.modify' (<> DL.fromList cs)
+instance Monad m => MonadInstruct cmd (InstructT cmd m) where
+    instruct c = InstructT $ Strict.modify' (`DL.snoc` c)
+    instructs cs = InstructT $ Strict.modify' (<> DL.fromList cs)
 
-instance {-# OVERLAPPING #-} MonadInstruct cmd (Strict.StateT (DL.DList cmd) NewEmptyMVar) where
-    instruct c = Strict.modify' (`DL.snoc` c)
-    instructs cs = Strict.modify' (<> DL.fromList cs)
+-- -- | Instance that does real work by running the 'State' of commands with mempty.
+-- -- Essentially a Writer monad, but using a State monad so it can be
+-- -- used inside a ContT which only has an instance for MonadState.
+-- instance MonadCodify cmd (Lazy.State (DL.DList cmd)) where
+--     codifies f = pure $ DL.toList . (`Lazy.execState` mempty) . f
 
--- | Instance that does real work by running the 'State' of commands with mempty.
--- Essentially a Writer monad, but using a State monad so it can be
--- used inside a ContT which only has an instance for MonadState.
-instance MonadCodify cmd (Lazy.State (DL.DList cmd)) where
-    codifies f = pure $ DL.toList . (`Lazy.execState` mempty) . f
-
-instance MonadInstruct cmd (Lazy.State (DL.DList cmd)) where
-    instruct c = Lazy.modify' (`DL.snoc` c)
-    instructs cs = Lazy.modify' (<> DL.fromList cs)
+-- instance MonadInstruct cmd (Lazy.State (DL.DList cmd)) where
+--     instruct c = Lazy.modify' (`DL.snoc` c)
+--     instructs cs = Lazy.modify' (<> DL.fromList cs)
 
 -- | Passthrough instance
-instance {-# OVERLAPPABLE #-} (MonadCodify cmd m, MonadInstruct cmd m) => MonadCodify cmd (Strict.StateT s m) where
+instance (MonadCodify cmd m, MonadInstruct cmd m) => MonadCodify cmd (Strict.StateT s m) where
     codifies f = do
         s <- Strict.get
         lift $ codifies $ \a -> (`Strict.evalStateT` s) $ f a
 
-instance {-# OVERLAPPABLE #-} MonadInstruct cmd m => MonadInstruct cmd (Strict.StateT s m) where
+instance MonadInstruct cmd m => MonadInstruct cmd (Strict.StateT s m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
 -- | Passthrough instance
-instance {-# OVERLAPPABLE #-} MonadCodify cmd m => MonadCodify cmd (Lazy.StateT s m) where
+instance MonadCodify cmd m => MonadCodify cmd (Lazy.StateT s m) where
     codifies f = do
         s <- Lazy.get
         lift $ codifies $ \a -> (`Lazy.evalStateT` s) $ f a
 
-instance {-# OVERLAPPABLE #-} MonadInstruct cmd m => MonadInstruct cmd (Lazy.StateT s m) where
+instance MonadInstruct cmd m => MonadInstruct cmd (Lazy.StateT s m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
@@ -390,7 +392,7 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
             -- blocking io, must use MVar
             Left ma -> do
                 v <- lift $ NewEmptyMVar newEmptyMVar
-                exec' $ flip fmap (Concur @cmd $ pure (Left ma))
+                runInstructT $ exec' $ flip fmap (Concur @cmd $ pure (Left ma))
                     (\a -> command' $ flip fmap (k a)  -- convert Concur cmd cmd to a cmd
                         (\b -> command' -- convert Concur cmd cmd to a cmd
                             -- Concur cmd cmd
