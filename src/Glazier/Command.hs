@@ -31,7 +31,6 @@ module Glazier.Command
     , instructs
     , exec
     , exec'
-    , exec_
     , eval
     , eval'
     , sequentially
@@ -248,10 +247,28 @@ exec = instruct . command
 exec' :: (MonadInstruct cmd m, AsFacet (c cmd) cmd) => c cmd -> m ()
 exec' = instruct . command'
 
--- | @'exec'' = 'instruct' . 'command''@
-exec_ :: (Functor c, MonadInstruct cmd m, AsFacet [cmd] cmd, AsFacet (c cmd) cmd)
-    => c () -> m ()
-exec_ = instruct . command' . fmap command_
+-- | Evaulates a unit functor command.
+-- A simpler variation of 'dispatch' that only requires a @MonadInstruct cmd m@
+-- This difference between 'dispatch_' and 'exec' is that 'dispatch_'
+-- doesn't require a @AsFacet () cmd@ constraint
+dispatch_ ::
+    ( AsFacet (c cmd) cmd
+    , AsFacet [cmd] cmd
+    , MonadInstruct cmd m
+    , Functor c
+    ) => c () -> m ()
+dispatch_ = exec' . fmap command_
+
+-- | Retrieves the result of a functor command.
+dispatch ::
+    ( AsFacet (c cmd) cmd
+    , MonadCommand cmd m
+    , Functor c
+    ) => c a -> m a
+dispatch c = eval_ m
+  where
+    m f = exec' $ f <$> c
+
 
 -- | This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
@@ -277,6 +294,8 @@ eval_ m = delegate $ \k -> do
     f <- codify k
     m f
 
+-- | This is useful for converting a command that needs a handler for @a@
+-- into a monad that fires @a@
 eval' ::
     ( MonadCommand cmd m
     , AsFacet [cmd] cmd
@@ -285,6 +304,8 @@ eval' ::
     => ((a -> cmd) -> c cmd) -> m a
 eval' k = eval_ $ exec' . k
 
+-- | This is useful for converting a command that needs a handler for @a@
+-- into a monad that fires @a@
 eval ::
     ( MonadCommand cmd m
     , AsFacet [cmd] cmd
@@ -304,26 +325,6 @@ eval k = eval_ $ exec . k
 -- data dependency is not explicit.
 sequentially :: MonadCont m => m a -> m a
 sequentially = id
-
--- | Retrieves the result of a functor command.
-dispatch ::
-    ( AsFacet (c cmd) cmd
-    , MonadCommand cmd m
-    , Functor c
-    ) => c a -> m a
-dispatch c = delegate $ \fire -> do
-    fire' <- codify fire
-    exec' $ fire' <$> c
-
--- | Retrieves the result of a functor command.
--- A simpler variation of 'dispatch' that only requires a @MonadInstruct cmd m@
-dispatch_ ::
-    ( AsFacet (c cmd) cmd
-    , AsFacet [cmd] cmd
-    , MonadInstruct cmd m
-    , Functor c
-    ) => c () -> m ()
-dispatch_ = exec' . fmap command_
 
 ----------------------------------------------
 -- Batch independant commands
@@ -358,12 +359,9 @@ concurringly ::
 concurringly = dispatch
 
 -- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
--- A simpler variation of 'concurringly' that only requires a @MonadState (DL.DList cmd) m@
+-- A simpler variation of 'concurringly' that only requires a @MonadInstruct cmd m@
 concurringly_ :: (MonadInstruct cmd m, AsConcur cmd) => Concur cmd () -> m ()
 concurringly_ = dispatch_
-
--- instance (AsConcur cmd) => MonadState (DL.DList cmd) (Concur cmd) where
---     state m = Concur $ Right <$> Strict.state m
 
 instance Functor (Concur cmd) where
     fmap f (Concur m) = Concur $ (either (Left . fmap f) (Right . f)) <$> m
@@ -406,8 +404,8 @@ instance AsConcur cmd => MonadInstruct cmd (Concur cmd) where
     instruct c = Concur $ Right <$> Strict.modify' (`DL.snoc` c)
     instructs cs = Concur $ Right <$> Strict.modify' (<> DL.fromList cs)
 
--- | This instance makes usages of 'sequel' concurrent when used
--- insdie a 'concurringly' or 'concurringly_' block.
+-- | This instance makes usages of 'eval'' concurrent when used
+-- inside a 'concurringly' or 'concurringly_' block.
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
 -- The Concur monad allows scheduling the command in concurrently with other commands.
