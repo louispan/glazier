@@ -197,7 +197,7 @@ testEffects = verifyExec unAppCmd (fixExec testEffects')
 -- programs
 ----------------------------------------------
 
-ioProgram :: (AsFacet (IOEffect cmd) cmd, AsFacet [cmd] cmd) => State (DL.DList cmd) ()
+ioProgram :: (AsFacet (IOEffect cmd) cmd, AsFacet [cmd] cmd) => Program cmd ()
 ioProgram = do
     exec' $ PutStrLn "Write two things"
     evalContT $ do
@@ -218,7 +218,7 @@ ioProgramWithOnlyConcur ::
     ( AsFacet (IOEffect cmd) cmd
     , AsConcur cmd
     -- , MonadCommand cmd m
-    ) => State (DL.DList cmd) ()
+    ) => Program cmd ()
 ioProgramWithOnlyConcur = do
     exec' $ PutStrLn "Write two things"
     concurringly_ $ do
@@ -237,13 +237,13 @@ ioProgramWithOnlyConcur = do
 -- | using concur & cont together
 ioProgramWithConcur ::
     ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd) => State (DL.DList cmd) ()
+    , AsConcur cmd) => Program cmd ()
 ioProgramWithConcur = do
     exec' $ PutStrLn "Write two things"
     evalContT $ do
         (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
-                -- required ApplicativeDo
+                -- requires ApplicativeDo
                 a1 <- eval' $ GetLine
                 a2 <- eval' $ GetLine
                 pure (a1, a2)
@@ -260,7 +260,7 @@ ioProgramWithConcur = do
 program ::
     ( AsFacet HelloWorldEffect cmd
     , AsFacet (IOEffect cmd) cmd
-    , AsFacet [cmd] cmd) => State (DL.DList cmd) ()
+    , AsFacet [cmd] cmd) => Program cmd ()
 program = do
     exec $ HelloWorld
     ioProgram
@@ -270,7 +270,7 @@ main :: IO ()
 main = do
     -- Reduce the program to the list of commands.
     let cs :: [AppCmd]
-        cs =  DL.toList $ (`execState` mempty) ioProgramWithConcur
+        cs =  DL.toList $ (`execState` mempty) $ runProgramT ioProgramWithConcur
         -- cs =  DL.toList $ (`execState` mempty) ioProgramWithOnlyConcur
 
     -- Shoud randomly have different results depending on which
