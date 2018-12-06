@@ -22,6 +22,7 @@ module Glazier.Command
     , codify'
     , ProgramT(..)
     , Program
+    , MonadProgram(..)
     , MonadCommand
     , command
     , command'
