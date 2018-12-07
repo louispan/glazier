@@ -13,7 +13,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE UndecidableInstances #-}   
+{-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Command
     ( MonadCodify(..)
@@ -28,8 +28,6 @@ module Glazier.Command
     , command'
     , command_
     , commands
-    , instruct
-    , instructs
     , exec
     , exec'
     , eval
@@ -72,106 +70,105 @@ import Data.Semigroup
 
 -- | Converts a handler that result in 'MonadProgram' of a list of commands
 -- to a handler that result in a list of commands, using the current monad context.
-class Monad m => MonadCodify cmd m | m -> cmd where
-    codifies :: (a -> m ()) -> m (a -> [cmd])
+class Monad m => MonadCodify c m | m -> c where
+    codifies :: (a -> m ()) -> m (a -> [c])
 
 -- | Variation of 'codifies' to transform the monad stack instead of a handler.
-codifies' :: (MonadCodify cmd m) => m () -> m [cmd]
+codifies' :: (MonadCodify c m) => m () -> m [c]
 codifies' m = do
     f <- codifies (const m)
     pure (f ())
 
 -- | Variation of 'codifies' to output a handler that result in a single command
-codify :: (AsFacet [cmd] cmd, MonadCodify cmd m) => (a -> m ()) -> m (a -> cmd)
+codify :: (AsFacet [c] c, MonadCodify c m) => (a -> m ()) -> m (a -> c)
 codify f = (commands .) <$> codifies f
 
 -- | Variation of 'codify' to transform the monad stack instead of a handler.
-codify' :: (AsFacet [cmd] cmd, MonadCodify cmd m) => m () -> m cmd
+codify' :: (AsFacet [c] c, MonadCodify c m) => m () -> m c
 codify' m = do
     f <- codify (const m)
     pure (f ())
 
-newtype ProgramT cmd m a = ProgramT { runProgramT :: Strict.StateT (DL.DList cmd) m a }
+newtype ProgramT c m a = ProgramT { runProgramT :: Strict.StateT (DL.DList c) m a }
     deriving (Functor, Applicative, Monad, MonadTrans)
 
-type Program cmd = ProgramT cmd Identity
+type Program c = ProgramT c Identity
 
-class Monad m => MonadProgram cmd m | m -> cmd where
+class Monad m => MonadProgram c m | m -> c where
     -- | Add a command to the list of commands.
-    instruct :: cmd -> m ()
-    -- instruct c = _commands %= (`DL.snoc` c)
+    instruct :: c -> m ()
+    instruct c = instructs [c]
 
     -- | Adds a list of commands to the list of commands.
-    instructs :: [cmd] -> m ()
-    -- instructs cs = _commands %= (<> DL.fromList cs)
+    instructs :: [c] -> m ()
 
 -- | Instance that does real work by running the State of commands with mempty.
 -- Essentially a Writer monad, but using a State monad so it can be
 -- used inside a ContT which only has an instance for MonadState.
-instance MonadCodify cmd (Program cmd) where
+instance MonadCodify c (Program c) where
     codifies f = pure $ DL.toList . (`Strict.execState` mempty) . runProgramT . f
 
-instance Monad m => MonadProgram cmd (ProgramT cmd m) where
+instance Monad m => MonadProgram c (ProgramT c m) where
     instruct c = ProgramT $ Strict.modify' (`DL.snoc` c)
     instructs cs = ProgramT $ Strict.modify' (<> DL.fromList cs)
 
 -- | Passthrough instance
-instance (MonadCodify cmd m, MonadProgram cmd m) => MonadCodify cmd (Strict.StateT s m) where
+instance (MonadCodify c m, MonadProgram c m) => MonadCodify c (Strict.StateT s m) where
     codifies f = do
         s <- Strict.get
         lift $ codifies $ \a -> (`Strict.evalStateT` s) $ f a
 
-instance MonadProgram cmd m => MonadProgram cmd (Strict.StateT s m) where
+instance MonadProgram c m => MonadProgram c (Strict.StateT s m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
 -- | Passthrough instance
-instance MonadCodify cmd m => MonadCodify cmd (Lazy.StateT s m) where
+instance MonadCodify c m => MonadCodify c (Lazy.StateT s m) where
     codifies f = do
         s <- Lazy.get
         lift $ codifies $ \a -> (`Lazy.evalStateT` s) $ f a
 
-instance MonadProgram cmd m => MonadProgram cmd (Lazy.StateT s m) where
+instance MonadProgram c m => MonadProgram c (Lazy.StateT s m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
 -- | Passthrough instance
-instance MonadCodify cmd m => MonadCodify cmd (IdentityT m) where
+instance MonadCodify c m => MonadCodify c (IdentityT m) where
     codifies f = lift . codifies $ runIdentityT . f
 
-instance MonadProgram cmd m => MonadProgram cmd (IdentityT m) where
+instance MonadProgram c m => MonadProgram c (IdentityT m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
 -- | Passthrough instance
-instance MonadCodify cmd m => MonadCodify cmd (ContT () m) where
+instance MonadCodify c m => MonadCodify c (ContT () m) where
     codifies f = lift . codifies $ evalContT . f
 
-instance MonadProgram cmd m => MonadProgram cmd (ContT a m) where
+instance MonadProgram c m => MonadProgram c (ContT a m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
 -- | Passthrough instance, using the Reader context
-instance MonadCodify cmd m => MonadCodify cmd (ReaderT r m) where
+instance MonadCodify c m => MonadCodify c (ReaderT r m) where
     codifies f = do
         r <- ask
         lift . codifies $ (`runReaderT` r) . f
 
-instance MonadProgram cmd m => MonadProgram cmd (ReaderT r m) where
+instance MonadProgram c m => MonadProgram c (ReaderT r m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
 -- | Passthrough instance, ignoring that the handler result might be Nothing.
-instance MonadCodify cmd m => MonadCodify cmd (MaybeT m) where
+instance MonadCodify c m => MonadCodify c (MaybeT m) where
     codifies f = lift . codifies $ void . runMaybeT . f
 
-instance MonadProgram cmd m => MonadProgram cmd (MaybeT m) where
+instance MonadProgram c m => MonadProgram c (MaybeT m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
 -- | Passthrough instance which requires the inner monad to be a 'MonadDelegate'.
 -- This means that the @Left e@ case can be handled by the provided delegate.
-instance (MonadDelegate () m, MonadCodify cmd m) => MonadCodify cmd (ExceptT e m) where
+instance (MonadDelegate () m, MonadCodify c m) => MonadCodify c (ExceptT e m) where
     codifies f = ExceptT $ delegate $ \kec -> do
         let g a = do
                 e <- runExceptT $ f a
@@ -181,58 +178,50 @@ instance (MonadDelegate () m, MonadCodify cmd m) => MonadCodify cmd (ExceptT e m
         g' <- codifies g
         kec (Right g')
 
-instance MonadProgram cmd m => MonadProgram cmd (ExceptT e m) where
+instance MonadProgram c m => MonadProgram c (ExceptT e m) where
     instruct = lift . instruct
     instructs = lift . instructs
 
-type MonadCommand cmd m =
-    ( MonadProgram cmd m
+type MonadCommand c m =
+    ( MonadProgram c m
     , MonadDelegate () m
-    , MonadCodify cmd m
-    , AsFacet [cmd] cmd
+    , MonadCodify c m
+    , AsFacet [c] c
     )
 
 -- | convert a request type to a command type.
 -- This is used for commands that doesn't have a continuation.
 -- Ie. commands that doesn't "returns" a value from running an effect.
 -- Use 'command'' for commands that require a continuation ("returns" a value).
-command :: (AsFacet c cmd) => c -> cmd
+command :: (AsFacet cmd c) => cmd -> c
 command = review facet
 
--- | A variation of 'command' for commands with a type variable @cmd@,
+-- | A variation of 'command' for commands with a type variable @c@,
 -- which is usually commands that are containers of command,
 -- or commands that require a continuation
 -- Eg. commands that "returns" a value from running an effect.
-command' :: (AsFacet (c cmd) cmd) => c cmd -> cmd
+command' :: (AsFacet (cmd c) c) => cmd c -> c
 command' = review facet
 
 -- | A variation of 'command' specific for unit that uses a
--- @AsFacet [cmd] cmd@ constraint instead of
--- @AsFacet () cmd@ to avoid poluting the contstraints
+-- @AsFacet [c] c@ constraint instead of
+-- @AsFacet () c@ to avoid poluting the contstraints
 -- when 'commands' is used.
-command_ :: (AsFacet [cmd] cmd) => () -> cmd
+command_ :: (AsFacet [c] c) => () -> c
 command_ = command' . \() -> []
 
 -- | Convert a list of commands to a command.
 -- This implementation avoids nesting for lists of a single command.
-commands :: (AsFacet [cmd] cmd) => [cmd] -> cmd
+commands :: (AsFacet [c] c) => [c] -> c
 commands [x] = x
 commands xs = command' xs
 
--- -- | Add a command to the list of commands for this MonadState.
--- instruct :: (HasCommands cmd s, MonadState s m) => cmd -> m ()
--- instruct c = _commands %= (`DL.snoc` c)
-
--- -- | Adds a list of commands to the list of commands for this MonadState.
--- instructs :: (HasCommands cmd s, MonadState s m) => [cmd] -> m ()
--- instructs cs = _commands %= (<> DL.fromList cs)
-
 -- | @'exec' = 'instruct' . 'command'@
-exec :: (MonadProgram cmd m, AsFacet c cmd) => c -> m ()
+exec :: (MonadProgram c m, AsFacet cmd c) => cmd -> m ()
 exec = instruct . command
 
 -- | @'exec'' = 'instruct' . 'command''@
-exec' :: (MonadProgram cmd m, AsFacet (c cmd) cmd) => c cmd -> m ()
+exec' :: (MonadProgram c m, AsFacet (cmd c) c) => cmd c -> m ()
 exec' = instruct . command'
 
 -- | This converts a monadic function that requires a handler for @a@ into
@@ -244,17 +233,17 @@ exec' = instruct . command'
 --
 -- @
 -- If tne input function purely returns a command, you can use:
--- eval_ . (exec' .) :: ((a -> cmd) -> c cmd) -> m a
+-- eval_ . (exec' .) :: ((a -> c) -> cmd c) -> m a
 --
 -- If tne input function monnadic returns a command, you can use:
--- eval_ . ((>>= exec') .) :: ((a -> cmd) -> m (c cmd)) -> m a
+-- eval_ . ((>>= exec') .) :: ((a -> c) -> m (cmd c)) -> m a
 -- @
 eval_ ::
     ( MonadDelegate () m
-    , MonadCodify cmd m
-    , AsFacet [cmd] cmd
+    , MonadCodify c m
+    , AsFacet [c] c
     )
-    => ((a -> cmd) -> m ()) -> m a
+    => ((a -> c) -> m ()) -> m a
 eval_ m = delegate $ \k -> do
     f <- codify k
     m f
@@ -262,21 +251,21 @@ eval_ m = delegate $ \k -> do
 -- | This is useful for converting a command that needs a handler for @a@
 -- into a monad that fires @a@
 eval' ::
-    ( MonadCommand cmd m
-    , AsFacet [cmd] cmd
-    , AsFacet (c cmd) cmd
+    ( MonadCommand c m
+    , AsFacet [c] c
+    , AsFacet (cmd c) c
     )
-    => ((a -> cmd) -> c cmd) -> m a
+    => ((a -> c) -> cmd c) -> m a
 eval' k = eval_ $ exec' . k
 
 -- | This is useful for converting a command that needs a handler for @a@
 -- into a monad that fires @a@
 eval ::
-    ( MonadCommand cmd m
-    , AsFacet [cmd] cmd
-    , AsFacet c cmd
+    ( MonadCommand c m
+    , AsFacet [c] c
+    , AsFacet cmd c
     )
-    => ((a -> cmd) -> c) -> m a
+    => ((a -> c) -> cmd) -> m a
 eval k = eval_ $ exec . k
 
 -- | Adds a 'MonadCont' constraint. It is redundant but rules out
@@ -296,13 +285,13 @@ sequentially = id
 -- Batch independant commands
 ----------------------------------------------
 
-type AsConcur cmd = (AsFacet [cmd] cmd, AsFacet (Concur cmd cmd) cmd)
+type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
 
 -- | This monad is intended to be used with @ApplicativeDo@ to allow do notation
 -- for composing commands that can be run concurrently.
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
-newtype Concur cmd a = Concur
+newtype Concur c a = Concur
     -- The base IO doesn't block (only does newEmptyMVar), but may return an IO that blocks.
     -- The return is @Either (IO a) a@ where 'Left' is used for blocking IO
     -- and 'Right' is used for nonblocking pure values.
@@ -310,31 +299,31 @@ newtype Concur cmd a = Concur
     -- See the instance of 'Monad' for 'Concur'.
     -- Once a blocking IO is returned, then all subsequent binds require another nested MVar.
     -- So it is more efficient to groups of pure binds first before binding with blocking code.
-    { runConcur :: Strict.StateT (DL.DList cmd) NewEmptyMVar (Either (IO a) a)
+    { runConcur :: Strict.StateT (DL.DList c) NewEmptyMVar (Either (IO a) a)
     } deriving (G.Generic)
 
-instance Show (Concur cmd a) where
+instance Show (Concur c a) where
     showsPrec _ _ = showString "Concur"
 
--- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd a@
+-- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c a@
 concurringly ::
-    ( MonadCommand cmd m
-    , AsConcur cmd
-    ) => Concur cmd a -> m a
+    ( MonadCommand c m
+    , AsConcur c
+    ) => Concur c a -> m a
 concurringly c = eval_ m
   where
     m f = exec' $ f <$> c
 
--- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur cmd ()@
--- A simpler variation of 'concurringly' that only requires a @MonadProgram cmd m@
-concurringly_ :: (MonadProgram cmd m, AsConcur cmd) => Concur cmd () -> m ()
+-- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
+-- A simpler variation of 'concurringly' that only requires a @MonadProgram c m@
+concurringly_ :: (MonadProgram c m, AsConcur c) => Concur c () -> m ()
 concurringly_ = exec' . fmap command_
 
-instance Functor (Concur cmd) where
+instance Functor (Concur c) where
     fmap f (Concur m) = Concur $ (either (Left . fmap f) (Right . f)) <$> m
 
 -- | Applicative instand allows building up list of commands without blocking
-instance Applicative (Concur cmd) where
+instance Applicative (Concur c) where
     pure = Concur . pure . pure
     (Concur f) <*> (Concur a) = Concur $ liftA2 go f a
       where
@@ -348,7 +337,7 @@ instance Applicative (Concur cmd) where
             (Right g', Right b') -> Right (g' b')
 
 -- Monad instance can't build commands without blocking.
-instance (AsConcur cmd) => Monad (Concur cmd) where
+instance (AsConcur c) => Monad (Concur c) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
         case m' of
@@ -357,17 +346,17 @@ instance (AsConcur cmd) => Monad (Concur cmd) where
             -- blocking io, must use MVar
             Left ma -> do
                 v <- lift $ NewEmptyMVar newEmptyMVar
-                runProgramT $ exec' $ flip fmap (Concur @cmd $ pure (Left ma))
-                    (\a -> command' $ flip fmap (k a)  -- convert Concur cmd cmd to a cmd
-                        (\b -> command' -- convert Concur cmd cmd to a cmd
-                            -- Concur cmd cmd
-                            $ command_ <$> (Concur @cmd $ pure $ Left $ putMVar v b)))
+                runProgramT $ exec' $ flip fmap (Concur @c $ pure (Left ma))
+                    (\a -> command' $ flip fmap (k a)  -- convert @Concur c c@ to a @c@
+                        (\b -> command' -- convert @Concur c c@ to a @c@
+                            -- Concur c c
+                            $ command_ <$> (Concur @c $ pure $ Left $ putMVar v b)))
                 pure $ Left $ takeMVar v
 
-instance AsConcur cmd => MonadCodify cmd (Concur cmd) where
+instance AsConcur c => MonadCodify c (Concur c) where
     codifies f = pure $ pure . command' . fmap command_ . f
 
-instance AsConcur cmd => MonadProgram cmd (Concur cmd) where
+instance AsConcur c => MonadProgram c (Concur c) where
     instruct c = Concur $ Right <$> Strict.modify' (`DL.snoc` c)
     instructs cs = Concur $ Right <$> Strict.modify' (<> DL.fromList cs)
 
@@ -376,7 +365,7 @@ instance AsConcur cmd => MonadProgram cmd (Concur cmd) where
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
 -- The Concur monad allows scheduling the command in concurrently with other commands.
-instance AsConcur cmd => MonadDelegate () (Concur cmd) where
+instance AsConcur c => MonadDelegate () (Concur c) where
     delegate f = Concur $ do
         v <- lift $ NewEmptyMVar newEmptyMVar
         b <- runConcur $ f (\a -> Concur $ lift $ pure $ Left $ putMVar v a)
