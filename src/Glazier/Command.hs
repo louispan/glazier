@@ -30,6 +30,7 @@ module Glazier.Command
     , commands
     , exec
     , exec'
+    , eval_
     , eval
     , eval'
     , sequentially
