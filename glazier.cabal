@@ -15,21 +15,27 @@ tested-with:         GHC == 8.4.1
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Glazier.Command
+  exposed-modules:     Data.Aeson.Applicative
+                       Glazier.Command
                        Glazier.Command.Exec
                        Glazier.Command.Internal
                        Glazier.Benign
                        Glazier.Benign.Internal
   build-depends:       base >= 4.7 && < 5
+                     , aeson >= 1.1.2.0
                      , alternators >= 1.0
+                     , containers >= 0.5
                      , data-diverse >= 4.6
                      , data-diverse-lens >= 4.3
                      , dlist >= 0.8
                      , lens >= 4
                      , mtl >= 2
+                     , text >= 1.2
                      , transformers >= 0.4
                      , unliftio >= 0.2
                      , unliftio-core >= 0.1
+                     , unordered-containers >= 0.2.7
+                     , vector >= 0.11
   ghc-options:        -Wall -Wredundant-constraints
   default-language:    Haskell2010
 
