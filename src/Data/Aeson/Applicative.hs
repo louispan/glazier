@@ -11,8 +11,9 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Data.Aeson.Applicative where
@@ -25,12 +26,12 @@ import qualified Data.Aeson.Internal as A
 import qualified Data.Aeson.Types as A
 import Data.Functor.Compose
 import qualified Data.HashMap.Strict as H
+import qualified Data.List as DL
 import qualified Data.Map.Strict as M
 import Data.Tagged
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified GHC.Generics as G
-import qualified Data.List as DL
 import Unsafe.Coerce
 
 -- -----------------------------------------------------
@@ -215,11 +216,10 @@ genericMLiftParseJSON :: (G.Generic1 f, GMFromJSON m A.One (G.Rep1 f))
                      -> A.Value -> A.Parser (m (f a))
 genericMLiftParseJSON opts pj pjl = fmap (fmap G.to1) . gMParseJSON opts (MFrom1Args pj pjl)
 
--- -----------------------------------------------------
--- Generic MToJSON instances
--- -----------------------------------------------------
+--------------------------------------------------------------------------------
+-- From unexported Data/Aeson/Types/Generic.hs
+--------------------------------------------------------------------------------
 
--- | From unexported Data/Aeson/Types/Generic.hs
 class IsRecord (f :: * -> *) (isRecord :: k) | f -> isRecord
   where
     isUnary :: f a -> Bool
@@ -240,15 +240,6 @@ instance IsRecord (f G.:.: g) 'True
 instance IsRecord G.U1 'False
   where isUnary = const False
 
--- -----------------------------------------------------
-
-class    And bool1 bool2 bool3 | bool1 bool2 -> bool3
-
-instance And 'True  'True  'True
-instance And 'False 'False 'False
-instance And 'False 'True  'False
-instance And 'True  'False 'False
-
 --------------------------------------------------------------------------------
 
 class AllNullary (f :: * -> *) allNullary | f -> allNullary
@@ -265,6 +256,17 @@ instance AllNullary G.Par1 'False
 instance AllNullary (G.Rec1 f) 'False
 instance AllNullary G.U1 'True
 
+-- -----------------------------------------------------
+
+class    And bool1 bool2 bool3 | bool1 bool2 -> bool3
+
+instance And 'True  'True  'True
+instance And 'False 'False 'False
+instance And 'False 'True  'False
+instance And 'True  'False 'False
+
+--------------------------------------------------------------------------------
+-- | From unexported Data/Aeson/Types/ToJSON.hs
 --------------------------------------------------------------------------------
 
 -- | Get the name of the constructor of a sum datatype.
@@ -419,43 +421,121 @@ instance (Applicative m, GMToEncoding m arity f) => TaggedObjectMEnc' m arity f 
         Tagged . (\z -> (pure E.comma) `combine` mToEncoding contentsFieldName `combine` (pure E.colon) `combine` z) .
         gMToEncoding opts targs
       where combine = liftA2 (E.><)
+
 --------------------------------------------------------------------------------
+
+class ObjectWithSingleFieldMEnc m arity f where
+    objectWithSingleFieldMEnc :: A.Options -> MToArgs m A.Encoding arity a
+                             -> f a -> m A.Encoding
+
+instance ( ObjectWithSingleFieldMEnc m arity a
+         , ObjectWithSingleFieldMEnc m arity b
+         ) => ObjectWithSingleFieldMEnc m arity (a G.:+: b) where
+    objectWithSingleFieldMEnc opts targs (G.L1 x) =
+      objectWithSingleFieldMEnc opts targs x
+    objectWithSingleFieldMEnc opts targs (G.R1 x) =
+      objectWithSingleFieldMEnc opts targs x
+
+instance ( Functor m
+         , GMToEncoding m arity a
+         , ConsMToEncoding m arity a
+         , G.Constructor c
+         ) => ObjectWithSingleFieldMEnc m arity (G.C1 c a) where
+    objectWithSingleFieldMEnc opts targs v = (E.pairs . E.pair key) <$> val
+      where
+        key :: T.Text
+        key = T.pack (A.constructorTagModifier opts (G.conName (undefined :: t c a p)))
+        val :: m (E.Encoding' A.Value)
+        val = gMToEncoding opts targs v
+
+--------------------------------------------------------------------------------
+
+class TwoElemArrayMEnc m arity f where
+    twoElemArrayMEnc :: A.Options -> MToArgs m A.Encoding arity a
+                    -> f a -> m A.Encoding
+
+instance ( TwoElemArrayMEnc m arity a
+         , TwoElemArrayMEnc m arity b
+         ) => TwoElemArrayMEnc m arity (a G.:+: b) where
+    twoElemArrayMEnc opts targs (G.L1 x) = twoElemArrayMEnc opts targs x
+    twoElemArrayMEnc opts targs (G.R1 x) = twoElemArrayMEnc opts targs x
+
+instance ( Applicative m
+         , GMToEncoding m arity a
+         , ConsMToEncoding m arity a
+         , G.Constructor c
+         ) => TwoElemArrayMEnc m arity (G.C1 c a) where
+    twoElemArrayMEnc opts targs x = E.list id <$> sequenceA
+      [ mToEncoding (A.constructorTagModifier opts (G.conName (undefined :: t c a p)))
+      , gMToEncoding opts targs x
+      ]
+
+--------------------------------------------------------------------------------
+
+class UntaggedValueMEnc m arity f where
+    untaggedValueMEnc :: A.Options -> MToArgs m A.Encoding arity a
+                     -> f a -> m A.Encoding
+
+instance
+    ( UntaggedValueMEnc m arity a
+    , UntaggedValueMEnc m arity b
+    ) => UntaggedValueMEnc m arity (a G.:+: b)
+  where
+    untaggedValueMEnc opts targs (G.L1 x) = untaggedValueMEnc opts targs x
+    untaggedValueMEnc opts targs (G.R1 x) = untaggedValueMEnc opts targs x
+
+instance {-# OVERLAPPABLE #-}
+    ( GMToEncoding m arity a
+    , ConsMToEncoding m arity a
+    ) => UntaggedValueMEnc m arity (G.C1 c a)
+  where
+    untaggedValueMEnc = gMToEncoding
+
+instance {-# OVERLAPPING #-}
+    ( Applicative m, G.Constructor c )
+    => UntaggedValueMEnc m arity (G.C1 c G.U1)
+  where
+    untaggedValueMEnc opts _ _ = mToEncoding $
+        A.constructorTagModifier opts $ G.conName (undefined :: t c G.U1 p)
+
+-------------------------------------------------------------------------------
 
 class SumMToEncoding m arity f allNullary where
     sumMToEncoding :: A.Options -> MToArgs m A.Encoding arity a
                   -> f a -> Tagged allNullary (m A.Encoding)
 
--- instance ( GetConName                     f
---          , TaggedObjectEnc          arity f
---          , ObjectWithSingleFieldEnc arity f
---          , TwoElemArrayEnc          arity f
---          , UntaggedValueEnc         arity f
---          ) => SumMToEncoding arity f True where
---     sumToEncoding opts targs
---         | allNullaryToStringTag opts = Tagged . toEncoding .
---                                        constructorTagModifier opts . getConName
---         | otherwise = Tagged . nonAllNullarySumToEncoding opts targs
+instance ( Applicative m
+         , GetConName f
+         , TaggedObjectMEnc m arity f
+         , ObjectWithSingleFieldMEnc m arity f
+         , TwoElemArrayMEnc m arity f
+         , UntaggedValueMEnc m arity f
+         ) => SumMToEncoding m arity f 'True where
+    sumMToEncoding opts targs
+        | A.allNullaryToStringTag opts = Tagged . mToEncoding .
+                                       A.constructorTagModifier opts . getConName
+        | otherwise = Tagged . nonAllNullarySumMToEncoding opts targs
 
--- instance ( TwoElemArrayEnc          arity f
---          , TaggedObjectEnc          arity f
---          , ObjectWithSingleFieldEnc arity f
---          , UntaggedValueEnc         arity f
---          ) => SumMToEncoding arity f False where
---     sumToEncoding opts targs = Tagged . nonAllNullarySumToEncoding opts targs
+instance ( TwoElemArrayMEnc m arity f
+         , TaggedObjectMEnc m arity f
+         , ObjectWithSingleFieldMEnc m arity f
+         , UntaggedValueMEnc m arity f
+         ) => SumMToEncoding m arity f 'False where
+    sumMToEncoding opts targs = Tagged . nonAllNullarySumMToEncoding opts targs
 
--- nonAllNullarySumToEncoding :: ( TwoElemArrayEnc          arity f
---                               , TaggedObjectEnc          arity f
---                               , ObjectWithSingleFieldEnc arity f
---                               , UntaggedValueEnc         arity f
---                               ) => Options -> ToArgs Encoding arity a
---                                 -> f a -> Encoding
--- nonAllNullarySumToEncoding opts targs =
---     case sumEncoding opts of
---       TaggedObject{..}      ->
---         taggedObjectEnc opts targs tagFieldName contentsFieldName
---       ObjectWithSingleField -> objectWithSingleFieldEnc opts targs
---       TwoElemArray          -> twoElemArrayEnc opts targs
---       UntaggedValue         -> untaggedValueEnc opts targs
+nonAllNullarySumMToEncoding :: ( TwoElemArrayMEnc m arity f
+                              , TaggedObjectMEnc m arity f
+                              , ObjectWithSingleFieldMEnc m arity f
+                              , UntaggedValueMEnc m arity f
+                              ) => A.Options -> MToArgs m A.Encoding arity a
+                                -> f a -> m A.Encoding
+nonAllNullarySumMToEncoding opts targs =
+    case A.sumEncoding opts of
+      A.TaggedObject{..}      ->
+        taggedObjectMEnc opts targs tagFieldName contentsFieldName
+      A.ObjectWithSingleField -> objectWithSingleFieldMEnc opts targs
+      A.TwoElemArray          -> twoElemArrayMEnc opts targs
+      A.UntaggedValue         -> untaggedValueMEnc opts targs
 
 --------------------------------------------------------------------------------
 
@@ -495,15 +575,15 @@ instance ( Applicative m
     -- 'encodeProduct':
     gMToEncoding opts targs p = (\a -> E.list E.retagEncoding [a]) <$> mEncodeProduct opts targs p
 
--- instance ( AllNullary           (a :+: b) allNullary
---          , SumToEncoding  arity (a :+: b) allNullary
---          ) => GToEncoding arity (a :+: b) where
---     -- If all constructors of a sum datatype are nullary and the
---     -- 'allNullaryToStringTag' option is set they are encoded to
---     -- strings.  This distinction is made by 'sumToEncoding':
---     gToEncoding opts targs
---         = (unTagged :: Tagged allNullary Encoding -> Encoding)
---         . sumToEncoding opts targs
+instance ( AllNullary (a G.:+: b) allNullary
+         , SumMToEncoding m arity (a G.:+: b) allNullary
+         ) => GMToEncoding m arity (a G.:+: b) where
+    -- If all constructors of a sum datatype are nullary and the
+    -- 'allNullaryToStringTag' option is set they are encoded to
+    -- strings.  This distinction is made by 'sumToEncoding':
+    gMToEncoding opts targs
+        = (unTagged :: Tagged allNullary (m A.Encoding) -> A.Encoding)
+        . sumMToEncoding opts targs
 
 -- instance (ToJSON1 f, GToEncoding One g) => GToEncoding One (f :.: g) where
 --     -- If an occurrence of the last type parameter is nested inside two
