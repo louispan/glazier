@@ -18,6 +18,7 @@
 
 module Data.Aeson.Applicative.Internal where
 
+import Data.Maybe
 import Control.Applicative
 import Control.Monad
 import Data.Aeson
@@ -40,9 +41,9 @@ import Data.Aeson.Encoding.Internal
     , (>*<)
     , (><)
     )
-
 import Data.Aeson.Internal
 import Data.Aeson.Types
+import Data.Bits (unsafeShiftR)
 import Data.DList (DList)
 import qualified Data.DList as DList
 import Data.Functor.Compose
@@ -52,7 +53,7 @@ import qualified Data.Map.Strict as M
 import Data.Scientific
 import Data.Semigroup as Semigroup
 import Data.Tagged
-import qualified Data.Text as T
+import Data.Text (Text, pack, unpack)
 import qualified Data.Vector as V
 import GHC.Generics
 import Unsafe.Coerce
@@ -97,6 +98,8 @@ instance AllNullary Par1 'False
 instance AllNullary (Rec1 f) 'False
 instance AllNullary U1 'True
 
+newtype Tagged2 (s :: * -> *) b = Tagged2 {unTagged2 :: b}
+
 --------------------------------------------------------------------------------
 
 class And bool1 bool2 bool3 | bool1 bool2 -> bool3 where
@@ -106,6 +109,17 @@ instance And 'False 'False 'False
 instance And 'False 'True  'False
 instance And 'True  'False 'False
 
+--------------------------------------------------------------------------------
+
+class ProductSize f where
+    productSize :: Tagged2 f Int
+
+instance (ProductSize a, ProductSize b) => ProductSize (a :*: b) where
+    productSize = Tagged2 $ unTagged2 (productSize :: Tagged2 a Int) +
+                            unTagged2 (productSize :: Tagged2 b Int)
+
+instance ProductSize (S1 s a) where
+    productSize = Tagged2 1
 
 -- #############################################################################
 -- Data.Aeson.Types.ToJSON
@@ -205,7 +219,7 @@ mlistEncoding f (x:xs) = (pure openBracket) `combine` f x `combine` commas xs `c
 -- Based on Data.Aeson.Encoding.Internal.dict
 mdictEncoding
     :: Applicative m
-    => (k -> Encoding' T.Text)                     -- ^ key encoding
+    => (k -> Encoding' Text)                     -- ^ key encoding
     -> (v -> m Encoding)                         -- ^ value encoding
     -> (forall a. (k -> v -> a -> a) -> a -> c -> a)  -- ^ @foldrWithKey@ - indexed fold
     -> c                                              -- ^ container
@@ -369,7 +383,7 @@ instance FromString Encoding where
   fromString = toEncoding
 
 instance FromString Value where
-  fromString = String . T.pack
+  fromString = String . pack
 
 --------------------------------------------------------------------------------
 
@@ -652,8 +666,7 @@ instance {-# OVERLAPPING #-}
 --------------------------------------------------------------------------------
 -- Copy of aeson-1.4.2.0, which wasn't availabl in aeson-1.1.2.0
 --------------------------------------------------------------------------------
-#if MIN_VERSION_aeson(1,3,0)
-#else
+#if !MIN_VERSION_aeson(1,3,0)
 -- | Wrap a list of pairs as an object.
 class Monoid pairs => FromPairs enc pairs | enc -> pairs where
   fromPairs :: pairs -> enc
@@ -671,7 +684,7 @@ class Monoid kv => KeyValuePair v kv where
     pair :: String -> v -> kv
 
 instance (v ~ Value) => KeyValuePair v (DList Pair) where
-    pair k v = DList.singleton (T.pack k .= v)
+    pair k v = DList.singleton (pack k .= v)
 
 instance (e ~ Encoding) => KeyValuePair e Series where
     pair = pairStr
@@ -680,7 +693,7 @@ instance (e ~ Encoding) => KeyValuePair e Series where
         pairStr name val = pair' (string name) val
         {-# INLINE pairStr #-}
 
-        pair' :: Encoding' T.Text -> Encoding -> Series
+        pair' :: Encoding' Text -> Encoding -> Series
         pair' name val = Value $ retagEncoding $ retagEncoding name >< colon >< val
 
 #endif
@@ -797,19 +810,6 @@ mlistParser _ v = typeMismatch "[a]" v
 -- Functions
 -------------------------------------------------------------------------------
 
--- | Retrieve the value associated with the given key of an 'Object'.
--- The result is 'empty' if the key is not present or the value cannot
--- be converted to the desired type.
---
--- This accessor is appropriate if the key and value /must/ be present
--- in an object for it to be valid.  If the key and value are
--- optional, use '.:?' instead.
---
--- based on (.:)
-retrieve :: (MFromJSON m a) => Object -> T.Text -> Parser (m a)
-retrieve = mexplicitParseField mparseJSON
-{-# INLINE retrieve #-}
-
 -- | Retrieve the value associated with the given key of an 'Object'. The
 -- result is 'Nothing' if the key is not present or if its value is 'Null',
 -- or 'empty' if the value cannot be converted to the desired type.
@@ -818,21 +818,12 @@ retrieve = mexplicitParseField mparseJSON
 -- from an object without affecting its validity.  If the key and
 -- value are mandatory, use '.:' instead.
 -- based on (.:?)
-maybeRetrieve :: (Applicative m, MFromJSON m a) => Object -> T.Text -> Parser (m (Maybe a))
+maybeRetrieve :: (Applicative m, MFromJSON m a) => Object -> Text -> Parser (m (Maybe a))
 maybeRetrieve = mexplicitParseFieldMaybe mparseJSON
 {-# INLINE maybeRetrieve #-}
 
--- | Variant of '.:' with explicit parser function.
---
--- g. @'explicitParseField' 'parseJSON1' :: ('FromJSON1' f, 'FromJSON' a) -> 'Object' -> 'Text' -> 'Parser' (f a)@
-mexplicitParseField :: (Value -> Parser (m a)) -> Object -> T.Text -> Parser (m a)
-mexplicitParseField p obj key = case H.lookup key obj of
-    Nothing -> fail $ "key " ++ show key ++ " not present"
-    Just v  -> p v <?> Key key
-{-# INLINE mexplicitParseField #-}
-
 -- | Variant of '.:?' with explicit parser function.
-mexplicitParseFieldMaybe :: Applicative m => (Value -> Parser (m a)) -> Object -> T.Text -> Parser (m (Maybe a))
+mexplicitParseFieldMaybe :: Applicative m => (Value -> Parser (m a)) -> Object -> Text -> Parser (m (Maybe a))
 mexplicitParseFieldMaybe p obj key = case H.lookup key obj of
     Nothing -> pure (pure Nothing)
     Just v  -> mliftParseJSON p (mlistParser p) v <?> Key key -- listParser isn't used by maybe instance.
@@ -877,58 +868,61 @@ instance Applicative m => MGFromJSON m arity U1 where
         _isEmptyArray (Array arr) = V.null arr
         _isEmptyArray _ = False
 
--- instance ( MConsFromJSON m arity a
---          , AllNullary (C1 c a) allNullary
---          , MParseSum m arity (C1 c a) allNullary
---          ) => GFromJSON m arity (D1 d (C1 c a)) where
---     -- The option 'tagSingleConstructors' determines whether to wrap
---     -- a single-constructor type.
---     mgParseJSON opts fargs
---         | tagSingleConstructors opts
---             = fmap M1
---             . (unTagged :: Tagged allNullary (Parser (C1 c a p)) -> Parser (C1 c a p))
---             . parseSum opts fargs
---         | otherwise = fmap M1 . fmap M1 . consParseJSON opts fargs
+instance ( Applicative m, MConsFromJSON m arity a
+         , AllNullary (C1 c a) allNullary
+         , MParseSum m arity (C1 c a) allNullary
+         ) => MGFromJSON m arity (D1 d (C1 c a)) where
+    -- The option 'tagSingleConstructors' determines whether to wrap
+    -- a single-constructor type.
+    mgParseJSON opts fargs
+#if MIN_VERSION_aeson(1,3,0)
+        | tagSingleConstructors opts
+            = fmap (fmap M1)
+            . (unTagged :: Tagged allNullary (Parser (m (C1 c a p))) -> Parser (m (C1 c a p)))
+            . mparseSum opts fargs
+#endif
+        | otherwise = fmap (fmap (M1 . M1)) . mconsParseJSON opts fargs
 
--- instance (ConsFromJSON arity a) => GFromJSON arity (C1 c a) where
---     -- Constructors need to be decoded differently depending on whether they're
---     -- a record or not. This distinction is made by consParseJSON:
---     gParseJSON opts fargs = fmap M1 . consParseJSON opts fargs
+instance (Applicative m, MConsFromJSON m arity a) => MGFromJSON m arity (C1 c a) where
+    -- Constructors need to be decoded differently depending on whether they're
+    -- a record or not. This distinction is made by consParseJSON:
+    mgParseJSON opts fargs = fmap (fmap M1) . mconsParseJSON opts fargs
 
--- instance ( FromProduct arity a, FromProduct arity b
---          , ProductSize       a, ProductSize       b
---          ) => GFromJSON arity (a :*: b) where
---     -- Products are expected to be encoded to an array. Here we check whether we
---     -- got an array of the same size as the product, then parse each of the
---     -- product's elements using parseProduct:
---     gParseJSON opts fargs = withArray "product (:*:)" $ \arr ->
---       let lenArray = V.length arr
---           lenProduct = (unTagged2 :: Tagged2 (a :*: b) Int -> Int)
---                        productSize in
---       if lenArray == lenProduct
---       then parseProduct opts fargs arr 0 lenProduct
---       else fail $ "When expecting a product of " ++ show lenProduct ++
---                   " values, encountered an Array of " ++ show lenArray ++
---                   " elements instead"
+instance ( Applicative m, MFromProduct m arity a, MFromProduct m arity b
+         , ProductSize a, ProductSize b
+         ) => MGFromJSON m arity (a :*: b) where
+    -- Products are expected to be encoded to an array. Here we check whether we
+    -- got an array of the same size as the product, then parse each of the
+    -- product's elements using parseProduct:
+    mgParseJSON opts fargs = withArray "product (:*:)" $ \arr ->
+      let lenArray = V.length arr
+          lenProduct = (unTagged2 :: Tagged2 (a :*: b) Int -> Int)
+                       productSize in
+      if lenArray == lenProduct
+      then mparseProduct opts fargs arr 0 lenProduct
+      else fail $ "When expecting a product of " ++ show lenProduct ++
+                  " values, encountered an Array of " ++ show lenArray ++
+                  " elements instead"
 
--- instance ( AllNullary         (a :+: b) allNullary
---          , ParseSum     arity (a :+: b) allNullary
---          ) => GFromJSON arity (a :+: b) where
---     -- If all constructors of a sum datatype are nullary and the
---     -- 'allNullaryToStringTag' option is set they are expected to be
---     -- encoded as strings.  This distinction is made by 'parseSum':
---     gParseJSON opts fargs =
---       (unTagged :: Tagged allNullary (Parser ((a :+: b) d)) ->
---                                      Parser ((a :+: b) d))
---                  . parseSum opts fargs
+instance ( Applicative m
+         , AllNullary (a :+: b) allNullary
+         , MParseSum m arity (a :+: b) allNullary
+         ) => MGFromJSON m arity (a :+: b) where
+    -- If all constructors of a sum datatype are nullary and the
+    -- 'allNullaryToStringTag' option is set they are expected to be
+    -- encoded as strings.  This distinction is made by 'parseSum':
+    mgParseJSON opts fargs =
+      (unTagged :: Tagged allNullary (Parser (m ((a :+: b) d))) ->
+                                     Parser (m ((a :+: b) d)))
+                 . mparseSum opts fargs
 
--- instance (FromJSON1 f, GFromJSON One g) => GFromJSON One (f :.: g) where
---     -- If an occurrence of the last type parameter is nested inside two
---     -- composed types, it is decoded by using the outermost type's FromJSON1
---     -- instance to generically decode the innermost type:
---     gParseJSON opts fargs =
---       let gpj = gParseJSON opts fargs in
---       fmap Comp1 . liftParseJSON gpj (listParser gpj)
+instance (MFromJSON1 m f, MGFromJSON m One g) => MGFromJSON m One (f :.: g) where
+    -- If an occurrence of the last type parameter is nested inside two
+    -- composed types, it is decoded by using the outermost type's FromJSON1
+    -- instance to generically decode the innermost type:
+    mgParseJSON opts fargs =
+      let gpj = mgParseJSON opts fargs in
+      fmap (fmap Comp1) . mliftParseJSON gpj (mlistParser gpj)
 
 --------------------------------------------------------------------------------
 
@@ -936,20 +930,20 @@ class MParseSum m arity f allNullary where
     mparseSum :: Options -> MFromArgs m arity a
              -> Value -> Tagged allNullary (Parser (m (f a)))
 
--- instance ( MSumFromString m f
---          , MFromPair m arity f
---          , FromTaggedObject  arity f
---          , FromUntaggedValue arity f
---          ) => ParseSum       arity f True where
---     parseSum opts fargs
---         | allNullaryToStringTag opts = Tagged . parseAllNullarySum    opts
---         | otherwise                  = Tagged . parseNonAllNullarySum opts fargs
+instance ( MSumFromString m f
+         , MFromPair m arity f
+         , MFromTaggedObject m arity f
+         , MFromUntaggedValue m arity f
+         ) => MParseSum m arity f 'True where
+    mparseSum opts fargs
+        | allNullaryToStringTag opts = Tagged . mparseAllNullarySum opts
+        | otherwise                  = Tagged . mparseNonAllNullarySum opts fargs
 
--- instance ( FromPair          arity f
---          , FromTaggedObject  arity f
---          , FromUntaggedValue arity f
---          ) => ParseSum       arity f False where
---     parseSum opts fargs = Tagged . parseNonAllNullarySum opts fargs
+instance ( MFromPair m arity f
+         , MFromTaggedObject m arity f
+         , MFromUntaggedValue m arity f
+         ) => MParseSum m arity f 'False where
+    mparseSum opts fargs = Tagged . mparseNonAllNullarySum opts fargs
 
 --------------------------------------------------------------------------------
 
@@ -959,7 +953,7 @@ mparseAllNullarySum opts = withText "Text" $ \key ->
                               mparseSumFromString opts key
 
 class MSumFromString m f where
-    mparseSumFromString :: Options -> T.Text -> Maybe (m (f a))
+    mparseSumFromString :: Options -> Text -> Maybe (m (f a))
 
 instance (Functor m, MSumFromString m a, MSumFromString m b) => MSumFromString m (a :+: b) where
     mparseSumFromString opts key = (fmap L1 <$> mparseSumFromString opts key) <|>
@@ -969,48 +963,48 @@ instance (Applicative m, Constructor c) => MSumFromString m (C1 c U1) where
     mparseSumFromString opts key | key == name = Just $ pure $ M1 U1
                                  | otherwise   = Nothing
         where
-          name = T.pack $ constructorTagModifier opts $
+          name = pack $ constructorTagModifier opts $
                           conName (undefined :: t c U1 p)
 
 --------------------------------------------------------------------------------
 
--- parseNonAllNullarySum :: ( FromPair          arity f
---                          , FromTaggedObject  arity f
---                          , FromUntaggedValue arity f
---                          ) => Options -> FromArgs arity c
---                            -> Value -> Parser (f c)
--- parseNonAllNullarySum opts fargs =
---     case sumEncoding opts of
---       TaggedObject{..} ->
---           withObject "Object" $ \obj -> do
---             tag <- obj .: pack tagFieldName
---             fromMaybe (notFound tag) $
---               parseFromTaggedObject opts fargs contentsFieldName obj tag
+mparseNonAllNullarySum :: ( MFromPair m arity f
+                         , MFromTaggedObject m arity f
+                         , MFromUntaggedValue m arity f
+                         ) => Options -> MFromArgs m arity c
+                           -> Value -> Parser (m (f c))
+mparseNonAllNullarySum opts fargs =
+    case sumEncoding opts of
+      TaggedObject{..} ->
+          withObject "Object" $ \obj -> do
+            tag <- obj .: pack tagFieldName
+            fromMaybe (notFound tag) $
+              mparseFromTaggedObject opts fargs contentsFieldName obj tag
 
---       ObjectWithSingleField ->
---           withObject "Object" $ \obj ->
---             case H.toList obj of
---               [pair@(tag, _)] -> fromMaybe (notFound tag) $
---                                    parsePair opts fargs pair
---               _ -> fail "Object doesn't have a single field"
+      ObjectWithSingleField ->
+          withObject "Object" $ \obj ->
+            case H.toList obj of
+              [pr@(tag, _)] -> fromMaybe (notFound tag) $
+                                   mparsePair opts fargs pr
+              _ -> fail "Object doesn't have a single field"
 
---       TwoElemArray ->
---           withArray "Array" $ \arr ->
---             if V.length arr == 2
---             then case V.unsafeIndex arr 0 of
---                    String tag -> fromMaybe (notFound tag) $
---                                    parsePair opts fargs (tag, V.unsafeIndex arr 1)
---                    _ -> fail "First element is not a String"
---             else fail "Array doesn't have 2 elements"
+      TwoElemArray ->
+          withArray "Array" $ \arr ->
+            if V.length arr == 2
+            then case V.unsafeIndex arr 0 of
+                   String tag -> fromMaybe (notFound tag) $
+                                   mparsePair opts fargs (tag, V.unsafeIndex arr 1)
+                   _ -> fail "First element is not a String"
+            else fail "Array doesn't have 2 elements"
 
---       UntaggedValue -> parseUntaggedValue opts fargs
+      UntaggedValue -> mparseUntaggedValue opts fargs
 
 --------------------------------------------------------------------------------
 
 class MFromTaggedObject m arity f where
     mparseFromTaggedObject :: Options -> MFromArgs m arity a
                           -> String -> Object
-                          -> T.Text -> Maybe (Parser (m (f a)))
+                          -> Text -> Maybe (Parser (m (f a)))
 
 instance ( Functor m, MFromTaggedObject m arity a, MFromTaggedObject m arity b) =>
     MFromTaggedObject m arity (a :+: b) where
@@ -1026,7 +1020,7 @@ instance ( Functor m, MFromTaggedObject' m arity f
                                         opts fargs contentsFieldName obj
         | otherwise = Nothing
         where
-          name = T.pack $ constructorTagModifier opts $
+          name = pack $ constructorTagModifier opts $
                           conName (undefined :: t c f p)
 
 --------------------------------------------------------------------------------
@@ -1046,13 +1040,13 @@ instance ( IsRecord f isRecord
         (unTagged :: Tagged isRecord (Parser (m (f a))) -> Parser (m (f a))) .
         mparseFromTaggedObject'' opts fargs contentsFieldName
 
--- instance (MFromRecord m arity f) => MFromTaggedObject'' m arity f 'True where
---     mparseFromTaggedObject'' opts fargs _ =
---       Tagged . mparseRecord opts fargs
+instance (MFromRecord m arity f) => MFromTaggedObject'' m arity f 'True where
+    mparseFromTaggedObject'' opts fargs _ =
+      Tagged . mparseRecord opts fargs
 
--- instance (MGFromJSON arity f) => MFromTaggedObject'' m arity f 'False where
---     parseFromTaggedObject'' opts fargs contentsFieldName = Tagged .
---       (mgParseJSON opts fargs <=< (.: pack contentsFieldName))
+instance (MGFromJSON m arity f) => MFromTaggedObject'' m arity f 'False where
+    mparseFromTaggedObject'' opts fargs contentsFieldName = Tagged .
+      (mgParseJSON opts fargs <=< (.: pack contentsFieldName))
 
 instance {-# OVERLAPPING #-} Applicative m => MFromTaggedObject'' m arity U1 'False where
     mparseFromTaggedObject'' _ _ _ _ = Tagged (pure (pure U1))
@@ -1081,9 +1075,9 @@ instance {-# OVERLAPPING #-}
       | unwrapUnaryRecords opts = Tagged . mgParseJSON opts fargs
       | otherwise = Tagged . withObject "unary record" (mparseRecord opts fargs)
 
--- instance MFromRecord m arity f => ConsFromJSON' m arity f 'True where
---     mconsParseJSON' opts fargs =
---       Tagged . withObject "record (:*:)" (parseRecord opts fargs)
+instance MFromRecord m arity f => MConsFromJSON' m arity f 'True where
+    mconsParseJSON' opts fargs =
+      Tagged . withObject "record (:*:)" (mparseRecord opts fargs)
 
 instance MGFromJSON m arity f => MConsFromJSON' m arity f 'False where
     mconsParseJSON' opts fargs = Tagged . mgParseJSON opts fargs
@@ -1108,11 +1102,11 @@ instance {-# OVERLAPPABLE #-} (Selector s, MGFromJSON m arity a) =>
     mparseRecord opts fargs =
       (<?> Key label) . mgParseJSON opts fargs <=< (.: label)
         where
-          label = T.pack . fieldLabelModifier opts $ selName (undefined :: t s a p)
+          label = pack . fieldLabelModifier opts $ selName (undefined :: t s a p)
 
 instance {-# INCOHERENT #-} (Selector s, MFromJSON m a) =>
   MFromRecord m arity (S1 s (K1 i (Maybe a))) where
-    mparseRecord opts _ obj = fmap (M1 . K1) <$> obj `maybeRetrieve` T.pack label
+    mparseRecord opts _ obj = fmap (M1 . K1) <$> obj `maybeRetrieve` pack label
         where
           label = fieldLabelModifier opts $
                     selName (undefined :: t s (K1 i (Maybe a)) p)
@@ -1127,25 +1121,26 @@ instance {-# INCOHERENT #-} (Selector s, MFromJSON m a) =>
 
 --------------------------------------------------------------------------------
 
--- class FromProduct arity f where
---     parseProduct :: Options -> FromArgs arity a
---                  -> Array -> Int -> Int
---                  -> Parser (f a)
+class MFromProduct m arity f where
+    mparseProduct :: Options -> MFromArgs m arity a
+                 -> Array -> Int -> Int
+                 -> Parser (m (f a))
 
--- instance ( FromProduct    arity a
---          , FromProduct    arity b
---          ) => FromProduct arity (a :*: b) where
---     parseProduct opts fargs arr ix len =
---         (:*:) <$> parseProduct opts fargs arr ix  lenL
---               <*> parseProduct opts fargs arr ixR lenR
---         where
---           lenL = len `unsafeShiftR` 1
---           ixR  = ix + lenL
---           lenR = len - lenL
+instance ( Applicative m
+         , MFromProduct m arity a
+         , MFromProduct m arity b
+         ) => MFromProduct m arity (a :*: b) where
+    mparseProduct opts fargs arr ix len = getCompose $
+        (:*:) <$> Compose (mparseProduct opts fargs arr ix  lenL)
+              <*> Compose (mparseProduct opts fargs arr ixR lenR)
+        where
+          lenL = len `unsafeShiftR` 1
+          ixR  = ix + lenL
+          lenR = len - lenL
 
--- instance (GFromJSON arity a) => FromProduct arity (S1 s a) where
---     parseProduct opts fargs arr ix _ =
---       gParseJSON opts fargs $ V.unsafeIndex arr ix
+instance (MGFromJSON m arity a) => MFromProduct m arity (S1 s a) where
+    mparseProduct opts fargs arr ix _ =
+      mgParseJSON opts fargs $ V.unsafeIndex arr ix
 
 --------------------------------------------------------------------------------
 
@@ -1161,58 +1156,58 @@ instance
     mparsePair opts fargs pr = (fmap (fmap L1) <$> mparsePair opts fargs pr) <|>
                                 (fmap (fmap R1) <$> mparsePair opts fargs pr)
 
--- instance ( Constructor c
---          , MGFromJSON m arity a
---          , MConsFromJSON m arity a
---          ) => MFromPair m arity (C1 c a) where
---     mparsePair opts fargs (tag, value)
---         | tag == tag' = Just $ mgParseJSON opts fargs value
---         | otherwise   = Nothing
---         where
---           tag' = T.pack $ constructorTagModifier opts $
---                           conName (undefined :: t c a p)
-
--- --------------------------------------------------------------------------------
-
--- class FromUntaggedValue arity f where
---     parseUntaggedValue :: Options -> FromArgs arity a
---                        -> Value -> Parser (f a)
-
--- instance
---     ( FromUntaggedValue    arity a
---     , FromUntaggedValue    arity b
---     ) => FromUntaggedValue arity (a :+: b)
---   where
---     parseUntaggedValue opts fargs value =
---         L1 <$> parseUntaggedValue opts fargs value <|>
---         R1 <$> parseUntaggedValue opts fargs value
-
--- instance {-# OVERLAPPABLE #-}
---     ( GFromJSON            arity a
---     , ConsFromJSON         arity a
---     ) => FromUntaggedValue arity (C1 c a)
---   where
---     parseUntaggedValue = gParseJSON
-
--- instance {-# OVERLAPPING #-}
---     ( Constructor c )
---     => FromUntaggedValue arity (C1 c U1)
---   where
---     parseUntaggedValue opts _ (String s)
---         | s == pack (constructorTagModifier opts (conName (undefined :: t c U1 p))) =
---             pure $ M1 U1
---         | otherwise =
---             fail $ "Invalid tag: " ++ unpack s
---     parseUntaggedValue _ _ v = typeMismatch (conName (undefined :: t c U1 p)) v
+instance ( Constructor c
+         , MGFromJSON m arity a
+         , MConsFromJSON m arity a
+         ) => MFromPair m arity (C1 c a) where
+    mparsePair opts fargs (tag, value)
+        | tag == tag' = Just $ mgParseJSON opts fargs value
+        | otherwise   = Nothing
+        where
+          tag' = pack $ constructorTagModifier opts $
+                          conName (undefined :: t c a p)
 
 --------------------------------------------------------------------------------
 
-notFound :: T.Text -> Parser a
-notFound key = fail $ "The key \"" ++ T.unpack key ++ "\" was not found"
+class MFromUntaggedValue m arity f where
+    mparseUntaggedValue :: Options -> MFromArgs m arity a
+                       -> Value -> Parser (m (f a))
+
+instance
+    ( Functor m
+    , MFromUntaggedValue m arity a
+    , MFromUntaggedValue m arity b
+    ) => MFromUntaggedValue m arity (a :+: b)
+  where
+    mparseUntaggedValue opts fargs value =
+        fmap L1 <$> mparseUntaggedValue opts fargs value <|>
+        fmap R1 <$> mparseUntaggedValue opts fargs value
+
+instance {-# OVERLAPPABLE #-}
+    ( MGFromJSON m arity a
+    , MConsFromJSON m arity a
+    ) => MFromUntaggedValue m arity (C1 c a)
+  where
+    mparseUntaggedValue = mgParseJSON
+
+instance {-# OVERLAPPING #-}
+    ( Applicative m, Constructor c )
+    => MFromUntaggedValue m arity (C1 c U1)
+  where
+    mparseUntaggedValue opts _ (String s)
+        | s == pack (constructorTagModifier opts (conName (undefined :: t c U1 p))) =
+            pure $ pure $ M1 U1
+        | otherwise =
+            fail $ "Invalid tag: " ++ unpack s
+    mparseUntaggedValue _ _ v = typeMismatch (conName (undefined :: t c U1 p)) v
+
+--------------------------------------------------------------------------------
+
+notFound :: Text -> Parser a
+notFound key = fail $ "The key \"" ++ unpack key ++ "\" was not found"
 {-# INLINE notFound #-}
 
--- --------------------------------------------------------------------------------
-
+--------------------------------------------------------------------------------
 
 -- #############################################################################
 -- OLD
@@ -1293,10 +1288,10 @@ instance Applicative m => MToJSON m Char where
 instance Applicative m => MFromJSON m Char where
     mparseJSON = fmap pure . parseJSON
 
-instance Applicative m => MToJSON m T.Text where
+instance Applicative m => MToJSON m Text where
     mtoEncoding = pure . toEncoding
 
-instance Applicative m => MFromJSON m T.Text where
+instance Applicative m => MFromJSON m Text where
     mparseJSON = fmap pure . parseJSON
 
 instance Applicative m => MToJSON m Scientific where
