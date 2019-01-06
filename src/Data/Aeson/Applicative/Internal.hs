@@ -20,25 +20,41 @@ module Data.Aeson.Applicative.Internal where
 
 import Control.Applicative
 import Control.Monad
-import qualified Data.Aeson as A
-import qualified Data.Aeson.Encoding.Internal as E
-import qualified Data.Aeson.Internal as A
-import qualified Data.Aeson.Types as A
-import qualified Data.Aeson
-import qualified Data.Aeson.Encoding.Internal
-import qualified Data.Aeson.Internal
-import qualified Data.Aeson.Types
-import qualified Data.DList as DL
+import Data.Aeson
+import Data.Aeson.Encoding.Internal
+    ( Encoding
+    , Encoding'(..)
+    , InArray
+    , Series(..)
+    , closeBracket
+    , colon
+    , comma
+    , econcat
+    , emptyArray_
+    , list
+    , nullEncoding
+    , null_
+    , openBracket
+    , retagEncoding
+    , string
+    , (>*<)
+    , (><)
+    )
+
+import Data.Aeson.Internal
+import Data.Aeson.Types
+import Data.DList (DList)
+import qualified Data.DList as DList
 import Data.Functor.Compose
 import qualified Data.HashMap.Strict as H
-import qualified Data.List as L
+import Data.List (intersperse)
 import qualified Data.Map.Strict as M
 import Data.Scientific
-import Data.Semigroup
+import Data.Semigroup as Semigroup
 import Data.Tagged
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import qualified GHC.Generics as G
+import GHC.Generics
 import Unsafe.Coerce
 
 -- #############################################################################
@@ -50,19 +66,19 @@ class IsRecord (f :: * -> *) (isRecord :: k) | f -> isRecord
     isUnary :: f a -> Bool
     isUnary = const True
 
-instance (IsRecord f isRecord) => IsRecord (f G.:*: g) isRecord
+instance (IsRecord f isRecord) => IsRecord (f :*: g) isRecord
   where isUnary = const False
 #if MIN_VERSION_base(4,9,0)
-instance {-# OVERLAPPING #-} IsRecord (G.M1 G.S ('G.MetaSel 'Nothing u ss ds) f) 'False
+instance {-# OVERLAPPING #-} IsRecord (M1 S ('MetaSel 'Nothing u ss ds) f) 'False
 #else
-instance {-# OVERLAPPING #-} IsRecord (G.M1 G.S G.NoSelector f) 'False
+instance {-# OVERLAPPING #-} IsRecord (M1 S NoSelector f) 'False
 #endif
-instance (IsRecord f isRecord) => IsRecord (G.M1 G.S c f) isRecord
-instance IsRecord (G.K1 i c) 'True
-instance IsRecord G.Par1 'True
-instance IsRecord (G.Rec1 f) 'True
-instance IsRecord (f G.:.: g) 'True
-instance IsRecord G.U1 'False
+instance (IsRecord f isRecord) => IsRecord (M1 S c f) isRecord
+instance IsRecord (K1 i c) 'True
+instance IsRecord Par1 'True
+instance IsRecord (Rec1 f) 'True
+instance IsRecord (f :.: g) 'True
+instance IsRecord U1 'False
   where isUnary = const False
 
 --------------------------------------------------------------------------------
@@ -72,14 +88,14 @@ class AllNullary (f :: * -> *) allNullary | f -> allNullary where
 instance ( AllNullary a allNullaryL
         , AllNullary b allNullaryR
         , And allNullaryL allNullaryR allNullary
-        ) => AllNullary (a G.:+: b) allNullary
-instance AllNullary a allNullary => AllNullary (G.M1 i c a) allNullary
-instance AllNullary (a G.:*: b) 'False
-instance AllNullary (a G.:.: b) 'False
-instance AllNullary (G.K1 i c) 'False
-instance AllNullary G.Par1 'False
-instance AllNullary (G.Rec1 f) 'False
-instance AllNullary G.U1 'True
+        ) => AllNullary (a :+: b) allNullary
+instance AllNullary a allNullary => AllNullary (M1 i c a) allNullary
+instance AllNullary (a :*: b) 'False
+instance AllNullary (a :.: b) 'False
+instance AllNullary (K1 i c) 'False
+instance AllNullary Par1 'False
+instance AllNullary (Rec1 f) 'False
+instance AllNullary U1 'True
 
 --------------------------------------------------------------------------------
 
@@ -110,43 +126,43 @@ class MGToJSON m enc arity f where
     -- It also provides a generic implementation of 'toEncoding'
     -- (with @enc ~ 'Encoding'@ and @arity ~ 'Zero'@)
     -- and 'liftToEncoding' (if the @arity@ is 'One').
-    mgToJSON :: A.Options -> MToArgs m enc arity a -> f a -> m enc
+    mgToJSON :: Options -> MToArgs m enc arity a -> f a -> m enc
 
 -- | A 'ToArgs' value either stores nothing (for 'ToJSON') or it stores the two
 -- function arguments that encode occurrences of the type parameter (for
 -- 'ToJSON1').
 data MToArgs m res arity a where
-    MNoToArgs :: MToArgs m res A.Zero a
-    MTo1Args  :: (a -> m res) -> ([a] -> m res) -> MToArgs m res A.One a
+    MNoToArgs :: MToArgs m res Zero a
+    MTo1Args  :: (a -> m res) -> ([a] -> m res) -> MToArgs m res One a
 
 -- | A configurable generic JSON encoder. This function applied to
 -- 'defaultOptions' is used as the default for 'mtoEncoding' when the type
 -- is an instance of 'Generic'.
-mgenericToEncoding :: (G.Generic a, MGToJSON m A.Encoding A.Zero (G.Rep a))
-                  => A.Options -> a -> m A.Encoding
-mgenericToEncoding opts = mgToJSON opts MNoToArgs . G.from
+mgenericToEncoding :: (Generic a, MGToJSON m Encoding Zero (Rep a))
+                  => Options -> a -> m Encoding
+mgenericToEncoding opts = mgToJSON opts MNoToArgs . from
 
 -- | A configurable generic JSON encoder. This function applied to
 -- 'defaultOptions' is used as the default for 'liftToEncoding' when the type
 -- is an instance of 'Generic1'.
-mgenericLiftToEncoding :: (G.Generic1 f, MGToJSON m A.Encoding A.One (G.Rep1 f))
-                      => A.Options -> (a -> m A.Encoding) -> ([a] -> m A.Encoding)
-                      -> f a -> m A.Encoding
-mgenericLiftToEncoding opts te tel = mgToJSON opts (MTo1Args te tel) . G.from1
+mgenericLiftToEncoding :: (Generic1 f, MGToJSON m Encoding One (Rep1 f))
+                      => Options -> (a -> m Encoding) -> ([a] -> m Encoding)
+                      -> f a -> m Encoding
+mgenericLiftToEncoding opts te tel = mgToJSON opts (MTo1Args te tel) . from1
 
 -- -----------------------------------------------------
 -- Class
 -- -----------------------------------------------------
 
--- | Analogous to 'A.toJSON'
+-- | Analogous to 'toJSON'
 class Applicative m => MToJSON m a where
-    mtoEncoding :: a -> m A.Encoding
+    mtoEncoding :: a -> m Encoding
     {-# INLINE mtoEncoding #-}
 
-    default mtoEncoding :: (G.Generic a, MGToJSON m A.Encoding A.Zero (G.Rep a)) => a -> m A.Encoding
-    mtoEncoding = mgenericToEncoding A.defaultOptions
+    default mtoEncoding :: (Generic a, MGToJSON m Encoding Zero (Rep a)) => a -> m Encoding
+    mtoEncoding = mgenericToEncoding defaultOptions
 
-    mtoEncodingList :: [a] -> m A.Encoding
+    mtoEncodingList :: [a] -> m Encoding
     mtoEncodingList = mlistEncoding mtoEncoding
     {-# INLINE mtoEncodingList #-}
 
@@ -154,20 +170,20 @@ class Applicative m => MToJSON m a where
 -- Lifings of FromJSON and ToJSON to unary and binary type constructors
 -------------------------------------------------------------------------------
 
--- | Analogous to 'A.toJSON1'
+-- | Analogous to 'toJSON1'
 class Applicative m => MToJSON1 m f where
-    mliftToEncoding :: (a -> m A.Encoding) -> ([a] -> m A.Encoding) -> f a -> m A.Encoding
+    mliftToEncoding :: (a -> m Encoding) -> ([a] -> m Encoding) -> f a -> m Encoding
 
-    default mliftToEncoding :: (G.Generic1 f, MGToJSON m A.Encoding A.One (G.Rep1 f))
-                           => (a -> m A.Encoding) -> ([a] -> m A.Encoding)
-                           -> f a -> m A.Encoding
-    mliftToEncoding = mgenericLiftToEncoding A.defaultOptions
+    default mliftToEncoding :: (Generic1 f, MGToJSON m Encoding One (Rep1 f))
+                           => (a -> m Encoding) -> ([a] -> m Encoding)
+                           -> f a -> m Encoding
+    mliftToEncoding = mgenericLiftToEncoding defaultOptions
 
-    mliftToEncodingList :: (a -> m A.Encoding) -> ([a] -> m A.Encoding) -> [f a] -> m A.Encoding
+    mliftToEncodingList :: (a -> m Encoding) -> ([a] -> m Encoding) -> [f a] -> m Encoding
     mliftToEncodingList f g = mlistEncoding (mliftToEncoding f g)
 
 -- | Lift the standard 'toEncoding' function through the type constructor.
-mtoEncoding1 :: (MToJSON1 m f, MToJSON m a) => f a -> m A.Encoding
+mtoEncoding1 :: (MToJSON1 m f, MToJSON m a) => f a -> m Encoding
 mtoEncoding1 = mliftToEncoding mtoEncoding mtoEncodingList
 {-# INLINE mtoEncoding1 #-}
 
@@ -177,69 +193,69 @@ mtoEncoding1 = mliftToEncoding mtoEncoding mtoEncodingList
 
 -- | Helper function to use with 'mliftToEncoding'.
 -- Useful when writing own 'MToJSON1' instances.
-mlistEncoding :: Applicative m => (a -> m A.Encoding) -> [a] -> m A.Encoding
-mlistEncoding _  [] = pure E.emptyArray_
-mlistEncoding f (x:xs) = (pure E.openBracket) `combine` f x `combine` commas xs `combine` (pure E.closeBracket)
+mlistEncoding :: Applicative m => (a -> m Encoding) -> [a] -> m Encoding
+mlistEncoding _  [] = pure emptyArray_
+mlistEncoding f (x:xs) = (pure openBracket) `combine` f x `combine` commas xs `combine` (pure closeBracket)
   where
-    combine = liftA2 (E.><)
-    commas = foldr (\v vs -> (pure E.comma) `combine` f v `combine` vs) (pure $ E.Encoding mempty)
+    combine = liftA2 (><)
+    commas = foldr (\v vs -> (pure comma) `combine` f v `combine` vs) (pure $ Encoding mempty)
 {-# INLINE mlistEncoding #-}
 
 -- | Encode as JSON object
 -- Based on Data.Aeson.Encoding.Internal.dict
 mdictEncoding
     :: Applicative m
-    => (k -> E.Encoding' T.Text)                     -- ^ key encoding
-    -> (v -> m A.Encoding)                         -- ^ value encoding
+    => (k -> Encoding' T.Text)                     -- ^ key encoding
+    -> (v -> m Encoding)                         -- ^ value encoding
     -> (forall a. (k -> v -> a -> a) -> a -> c -> a)  -- ^ @foldrWithKey@ - indexed fold
     -> c                                              -- ^ container
-    -> m A.Encoding
-mdictEncoding encodeKey encodeVal foldrWithKey = foldrWithKey go (pure $ E.Encoding mempty)
+    -> m Encoding
+mdictEncoding encodeKey encodeVal foldrWithKey = foldrWithKey go (pure $ Encoding mempty)
   where
-    combine = liftA2 (E.><)
-    go k v c = encodeKV k v `combine` (pure E.comma) `combine` c
-    encodeKV k v = (pure . E.retagEncoding $ encodeKey k) `combine` (pure E.colon) `combine` (E.retagEncoding <$> encodeVal v)
+    combine = liftA2 (><)
+    go k v c = encodeKV k v `combine` (pure comma) `combine` c
+    encodeKV k v = (pure . retagEncoding $ encodeKey k) `combine` (pure colon) `combine` (retagEncoding <$> encodeVal v)
 {-# INLINE mdictEncoding #-}
 
 -------------------------------------------------------------------------------
 -- Generic toJSON / toEncoding
 -------------------------------------------------------------------------------
 
-instance {-# OVERLAPPABLE #-} (MGToJSON m enc arity a) => MGToJSON m enc arity (G.M1 i c a) where
+instance {-# OVERLAPPABLE #-} (MGToJSON m enc arity a) => MGToJSON m enc arity (M1 i c a) where
     -- Meta-information, which is not handled elsewhere, is ignored:
-    mgToJSON opts targs = mgToJSON opts targs . G.unM1
+    mgToJSON opts targs = mgToJSON opts targs . unM1
     {-# INLINE mgToJSON #-}
 
-instance MGToJSON m enc A.One G.Par1 where
+instance MGToJSON m enc One Par1 where
     -- Direct occurrences of the last type parameter are encoded with the
     -- function passed in as an argument:
-    mgToJSON _opts (MTo1Args tj _) = tj . G.unPar1
+    mgToJSON _opts (MTo1Args tj _) = tj . unPar1
     {-# INLINE mgToJSON #-}
 
 instance ( MConsToJSON m enc arity a
-         , AllNullary (G.C1 c a) allNullary
-         , MSumToJSON m enc arity (G.C1 c a) allNullary
-         ) => MGToJSON m enc arity (G.D1 d (G.C1 c a)) where
+         , AllNullary (C1 c a) allNullary
+         , MSumToJSON m enc arity (C1 c a) allNullary
+         ) => MGToJSON m enc arity (D1 d (C1 c a)) where
     -- The option 'tagSingleConstructors' determines whether to wrap
     -- a single-constructor type.
     mgToJSON opts targs
 #if MIN_VERSION_aeson(1,3,0)
         | tagSingleConstructors opts = (unTagged :: Tagged allNullary (m enc) -> m enc)
                                      . msumToJSON opts targs
-                                     . G.unM1
+                                     . unM1
 #endif
-        | otherwise = mconsToJSON opts targs . G.unM1 . G.unM1
+        | otherwise = mconsToJSON opts targs . unM1 . unM1
     {-# INLINE mgToJSON #-}
 
-instance (MConsToJSON m enc arity a) => MGToJSON m enc arity (G.C1 c a) where
+instance (MConsToJSON m enc arity a) => MGToJSON m enc arity (C1 c a) where
     -- Constructors need to be encoded differently depending on whether they're
     -- a record or not. This distinction is made by 'consToJSON':
-    mgToJSON opts targs = mconsToJSON opts targs . G.unM1
+    mgToJSON opts targs = mconsToJSON opts targs . unM1
     {-# INLINE mgToJSON #-}
 
-instance ( AllNullary (a G.:+: b) allNullary
-         , MSumToJSON  m enc arity (a G.:+: b) allNullary
-         ) => MGToJSON m enc arity (a G.:+: b)
+instance ( AllNullary (a :+: b) allNullary
+         , MSumToJSON  m enc arity (a :+: b) allNullary
+         ) => MGToJSON m enc arity (a :+: b)
   where
     -- If all constructors of a sum datatype are nullary and the
     -- 'allNullaryToStringTag' option is set they are encoded to
@@ -251,49 +267,49 @@ instance ( AllNullary (a G.:+: b) allNullary
 --------------------------------------------------------------------------------
 -- Generic toEncoding
 
-instance MToJSON m a => MGToJSON m A.Encoding arity (G.K1 i a) where
+instance MToJSON m a => MGToJSON m Encoding arity (K1 i a) where
     -- Constant values are encoded using their ToJSON instance:
-    mgToJSON _opts _ = mtoEncoding . G.unK1
+    mgToJSON _opts _ = mtoEncoding . unK1
     {-# INLINE mgToJSON #-}
 
-instance MToJSON1 m f => MGToJSON m A.Encoding A.One (G.Rec1 f) where
+instance MToJSON1 m f => MGToJSON m Encoding One (Rec1 f) where
     -- Recursive occurrences of the last type parameter are encoded using their
     -- ToEncoding1 instance:
-    mgToJSON _opts (MTo1Args te tel) = mliftToEncoding te tel . G.unRec1
+    mgToJSON _opts (MTo1Args te tel) = mliftToEncoding te tel . unRec1
     {-# INLINE mgToJSON #-}
 
-instance Applicative m => MGToJSON m A.Encoding arity G.U1 where
+instance Applicative m => MGToJSON m Encoding arity U1 where
     -- Empty constructors are encoded to an empty array:
-    mgToJSON _opts _ _ = pure E.emptyArray_
+    mgToJSON _opts _ _ = pure emptyArray_
     {-# INLINE mgToJSON #-}
 
 instance ( Applicative m
          , MEncodeProduct m arity a
          , MEncodeProduct m arity b
-         ) => MGToJSON m A.Encoding arity (a G.:*: b)
+         ) => MGToJSON m Encoding arity (a :*: b)
   where
     -- Products are encoded to an array. Here we allocate a mutable vector of
     -- the same size as the product and write the product's elements to it using
     -- 'encodeProduct':
-    mgToJSON opts targs p = fmap (E.list E.retagEncoding) $ sequenceA [mencodeProduct opts targs p]
+    mgToJSON opts targs p = fmap (list retagEncoding) $ sequenceA [mencodeProduct opts targs p]
     {-# INLINE mgToJSON #-}
 
 instance ( MToJSON1 m f
-         , MGToJSON m A.Encoding A.One g
-         ) => MGToJSON m A.Encoding A.One (f G.:.: g)
+         , MGToJSON m Encoding One g
+         ) => MGToJSON m Encoding One (f :.: g)
   where
     -- If an occurrence of the last type parameter is nested inside two
     -- composed types, it is encoded by using the outermost type's ToJSON1
     -- instance to generically encode the innermost type:
     mgToJSON opts targs =
       let gte = mgToJSON opts targs in
-      mliftToEncoding gte (mlistEncoding gte) . G.unComp1
+      mliftToEncoding gte (mlistEncoding gte) . unComp1
     {-# INLINE mgToJSON #-}
 
 --------------------------------------------------------------------------------
 
 class MSumToJSON m enc arity f allNullary where
-    msumToJSON :: A.Options -> MToArgs m enc arity a
+    msumToJSON :: Options -> MToArgs m enc arity a
               -> f a -> Tagged allNullary (m enc)
 
 instance
@@ -307,8 +323,8 @@ instance
     ) => MSumToJSON m enc arity f 'True
   where
     msumToJSON opts targs
-        | A.allNullaryToStringTag opts = Tagged . pure . fromString
-                                     . A.constructorTagModifier opts . getConName
+        | allNullaryToStringTag opts = Tagged . pure . fromString
+                                     . constructorTagModifier opts . getConName
         | otherwise = Tagged . mnonAllNullarySumToJSON opts targs
 
 instance ( MTaggedObject m enc arity f
@@ -324,23 +340,23 @@ mnonAllNullarySumToJSON ::
     , MSumToJSON' m ObjectWithSingleField enc arity f
     , MSumToJSON' m TwoElemArray enc arity f
     , MSumToJSON' m UntaggedValue enc arity f
-    ) => A.Options -> MToArgs m enc arity a
+    ) => Options -> MToArgs m enc arity a
     -> f a -> m enc
 mnonAllNullarySumToJSON opts targs =
-    case A.sumEncoding opts of
+    case sumEncoding opts of
 
-      A.TaggedObject{..}      ->
+      TaggedObject{..}      ->
         mtaggedObject opts targs tagFieldName contentsFieldName
 
-      A.ObjectWithSingleField ->
+      ObjectWithSingleField ->
         (unTagged :: Tagged ObjectWithSingleField (m enc) -> m enc)
           . msumToJSON' opts targs
 
-      A.TwoElemArray          ->
+      TwoElemArray          ->
         (unTagged :: Tagged TwoElemArray (m enc) -> m enc)
           . msumToJSON' opts targs
 
-      A.UntaggedValue         ->
+      UntaggedValue         ->
         (unTagged :: Tagged UntaggedValue (m enc) -> m enc)
           . msumToJSON' opts targs
 
@@ -349,26 +365,26 @@ mnonAllNullarySumToJSON opts targs =
 class FromString enc where
   fromString :: String -> enc
 
-instance FromString A.Encoding where
-  fromString = A.toEncoding
+instance FromString Encoding where
+  fromString = toEncoding
 
-instance FromString A.Value where
-  fromString = A.String . T.pack
+instance FromString Value where
+  fromString = String . T.pack
 
 --------------------------------------------------------------------------------
 
 class MTaggedObject m enc arity f where
-    mtaggedObject :: A.Options -> MToArgs m enc arity a
+    mtaggedObject :: Options -> MToArgs m enc arity a
                  -> String -> String
                  -> f a -> m enc
 
 instance ( MTaggedObject m enc arity a
          , MTaggedObject m enc arity b
-         ) => MTaggedObject m enc arity (a G.:+: b)
+         ) => MTaggedObject m enc arity (a :+: b)
   where
-    mtaggedObject opts targs tagFieldName contentsFieldName (G.L1 x) =
+    mtaggedObject opts targs tagFieldName contentsFieldName (L1 x) =
         mtaggedObject opts targs tagFieldName contentsFieldName x
-    mtaggedObject opts targs tagFieldName contentsFieldName (G.R1 x) =
+    mtaggedObject opts targs tagFieldName contentsFieldName (R1 x) =
         mtaggedObject opts targs tagFieldName contentsFieldName x
 
 instance
@@ -378,21 +394,21 @@ instance
     , FromPairs enc pairs
     , FromString enc
     , KeyValuePair enc pairs
-    , G.Constructor c
-    ) => MTaggedObject m enc arity (G.C1 c a)
+    , Constructor c
+    ) => MTaggedObject m enc arity (C1 c a)
   where
     mtaggedObject opts targs tagFieldName contentsFieldName =
       fmap (fromPairs . mappend tag) . contents
       where
         tag = tagFieldName `pair`
-          (fromString (A.constructorTagModifier opts (G.conName (undefined :: t c a p)))
+          (fromString (constructorTagModifier opts (conName (undefined :: t c a p)))
             :: enc)
         contents =
           (unTagged :: Tagged isRecord (m pairs) -> m pairs) .
-            mtaggedObject' opts targs contentsFieldName . G.unM1
+            mtaggedObject' opts targs contentsFieldName . unM1
 
 class MTaggedObject' m enc pairs arity f isRecord where
-    mtaggedObject' :: A.Options -> MToArgs m enc arity a
+    mtaggedObject' :: Options -> MToArgs m enc arity a
                   -> String -> f a -> Tagged isRecord (m pairs)
 
 instance
@@ -404,7 +420,7 @@ instance
     mtaggedObject' opts targs contentsFieldName =
         Tagged . fmap (contentsFieldName `pair`) . mgToJSON opts targs
 
-instance {-# OVERLAPPING #-} (Applicative m, Monoid pairs) => MTaggedObject' m enc pairs arity G.U1 'False where
+instance {-# OVERLAPPING #-} (Applicative m, Monoid pairs) => MTaggedObject' m enc pairs arity U1 'False where
     mtaggedObject' _ _ _ _ = Tagged (pure mempty)
 
 instance ( MRecordToPairs m enc pairs arity f
@@ -419,12 +435,12 @@ instance ( MRecordToPairs m enc pairs arity f
 class GetConName f where
     getConName :: f a -> String
 
-instance (GetConName a, GetConName b) => GetConName (a G.:+: b) where
-    getConName (G.L1 x) = getConName x
-    getConName (G.R1 x) = getConName x
+instance (GetConName a, GetConName b) => GetConName (a :+: b) where
+    getConName (L1 x) = getConName x
+    getConName (R1 x) = getConName x
 
-instance (G.Constructor c) => GetConName (G.C1 c a) where
-    getConName = G.conName
+instance (Constructor c) => GetConName (C1 c a) where
+    getConName = conName
 
 --------------------------------------------------------------------------------
 
@@ -437,38 +453,38 @@ data UntaggedValue
 --------------------------------------------------------------------------------
 
 class MSumToJSON' m s enc arity f where
-    msumToJSON' :: A.Options -> MToArgs m enc arity a
+    msumToJSON' :: Options -> MToArgs m enc arity a
                     -> f a -> Tagged s (m enc)
 
 instance ( MSumToJSON' m s enc arity a
          , MSumToJSON' m s enc arity b
-         ) => MSumToJSON' m s enc arity (a G.:+: b)
+         ) => MSumToJSON' m s enc arity (a :+: b)
   where
-    msumToJSON' opts targs (G.L1 x) = msumToJSON' opts targs x
-    msumToJSON' opts targs (G.R1 x) = msumToJSON' opts targs x
+    msumToJSON' opts targs (L1 x) = msumToJSON' opts targs x
+    msumToJSON' opts targs (R1 x) = msumToJSON' opts targs x
 
 --------------------------------------------------------------------------------
 
 instance
     ( Applicative m
-    , MGToJSON m A.Encoding arity a
-    , MConsToJSON m A.Encoding arity a
-    , G.Constructor c
-    ) => MSumToJSON' m TwoElemArray A.Encoding arity (G.C1 c a)
+    , MGToJSON m Encoding arity a
+    , MConsToJSON m Encoding arity a
+    , Constructor c
+    ) => MSumToJSON' m TwoElemArray Encoding arity (C1 c a)
   where
-    msumToJSON' opts targs x = Tagged $ fmap (E.list id) $ sequenceA
-      [ mtoEncoding (A.constructorTagModifier opts (G.conName (undefined :: t c a p)))
+    msumToJSON' opts targs x = Tagged $ fmap (list id) $ sequenceA
+      [ mtoEncoding (constructorTagModifier opts (conName (undefined :: t c a p)))
       , mgToJSON opts targs x
       ]
 
 --------------------------------------------------------------------------------
 
 class MConsToJSON m enc arity f where
-    mconsToJSON :: A.Options -> MToArgs m enc arity a
+    mconsToJSON :: Options -> MToArgs m enc arity a
                -> f a -> m enc
 
 class MConsToJSON' m enc arity f isRecord where
-    mconsToJSON' :: A.Options -> MToArgs m enc arity a
+    mconsToJSON' :: Options -> MToArgs m enc arity a
                     -> f a -> Tagged isRecord (m enc)
 
 instance ( IsRecord f isRecord
@@ -482,13 +498,13 @@ instance ( IsRecord f isRecord
 
 instance {-# OVERLAPPING #-}
          ( Functor m
-         , MRecordToPairs m enc pairs arity (G.S1 s f)
+         , MRecordToPairs m enc pairs arity (S1 s f)
          , FromPairs enc pairs
          , MGToJSON m enc arity f
-         ) => MConsToJSON' m enc arity (G.S1 s f) 'True
+         ) => MConsToJSON' m enc arity (S1 s f) 'True
   where
     mconsToJSON' opts targs
-      | A.unwrapUnaryRecords opts = Tagged . mgToJSON opts targs
+      | unwrapUnaryRecords opts = Tagged . mgToJSON opts targs
       | otherwise = Tagged . fmap fromPairs . mrecordToPairs opts targs
     {-# INLINE mconsToJSON' #-}
 
@@ -511,16 +527,16 @@ class MRecordToPairs m enc pairs arity f where
     -- 1st element: whole thing
     -- 2nd element: in case the record has only 1 field, just the value
     --              of the field (without the key); 'Nothing' otherwise
-    mrecordToPairs :: A.Options -> MToArgs m enc arity a
+    mrecordToPairs :: Options -> MToArgs m enc arity a
                   -> f a -> m pairs
 
 instance ( Applicative m
          , Monoid pairs
          , MRecordToPairs m enc pairs arity a
          , MRecordToPairs m enc pairs arity b
-         ) => MRecordToPairs m enc pairs arity (a G.:*: b)
+         ) => MRecordToPairs m enc pairs arity (a :*: b)
   where
-    mrecordToPairs opts (targs :: MToArgs m enc arity p) (a G.:*: b) =
+    mrecordToPairs opts (targs :: MToArgs m enc arity p) (a :*: b) =
         mappend <$> pairsOf a <*> pairsOf b
       where
         pairsOf :: (MRecordToPairs m enc pairs arity f) => f p -> m pairs
@@ -529,75 +545,75 @@ instance ( Applicative m
 
 instance
     ( Applicative m
-    , G.Selector s
+    , Selector s
     , MGToJSON m enc arity a
     , KeyValuePair enc pairs
-    ) => MRecordToPairs m enc pairs arity (G.S1 s a)
+    ) => MRecordToPairs m enc pairs arity (S1 s a)
   where
     mrecordToPairs = mfieldToPair
     {-# INLINE mrecordToPairs #-}
 
 instance {-# INCOHERENT #-}
     ( Applicative m
-    , G.Selector s
-    , MGToJSON m enc arity (G.K1 i (Maybe a))
+    , Selector s
+    , MGToJSON m enc arity (K1 i (Maybe a))
     , KeyValuePair enc pairs
     , Monoid pairs
-    ) => MRecordToPairs m enc pairs arity (G.S1 s (G.K1 i (Maybe a)))
+    ) => MRecordToPairs m enc pairs arity (S1 s (K1 i (Maybe a)))
   where
-    mrecordToPairs opts _ (G.M1 k1) | A.omitNothingFields opts
-                                 , G.K1 Nothing <- k1 = pure mempty
+    mrecordToPairs opts _ (M1 k1) | omitNothingFields opts
+                                 , K1 Nothing <- k1 = pure mempty
     mrecordToPairs opts targs m1 = mfieldToPair opts targs m1
     {-# INLINE mrecordToPairs #-}
 
 instance {-# INCOHERENT #-}
     ( Applicative m
-    , G.Selector s
-    , MGToJSON m enc arity (G.K1 i (Maybe a))
+    , Selector s
+    , MGToJSON m enc arity (K1 i (Maybe a))
     , KeyValuePair enc pairs
     , Monoid pairs
-    ) => MRecordToPairs m enc pairs arity (G.S1 s (G.K1 i (Data.Semigroup.Option a)))
+    ) => MRecordToPairs m enc pairs arity (S1 s (K1 i (Semigroup.Option a)))
   where
     mrecordToPairs opts targs = mrecordToPairs opts targs . unwrap
       where
-        unwrap :: G.S1 s (G.K1 i (Data.Semigroup.Option a)) p -> G.S1 s (G.K1 i (Maybe a)) p
-        unwrap (G.M1 (G.K1 (Data.Semigroup.Option a))) = G.M1 (G.K1 a)
+        unwrap :: S1 s (K1 i (Semigroup.Option a)) p -> S1 s (K1 i (Maybe a)) p
+        unwrap (M1 (K1 (Semigroup.Option a))) = M1 (K1 a)
     {-# INLINE mrecordToPairs #-}
 
 mfieldToPair :: ( Applicative m
-               , G.Selector s
+               , Selector s
                , MGToJSON m enc arity a
                , KeyValuePair enc pairs)
-            => A.Options -> MToArgs m enc arity p
-            -> G.S1 s a p -> m pairs
+            => Options -> MToArgs m enc arity p
+            -> S1 s a p -> m pairs
 mfieldToPair opts targs m1 =
-  let key   = A.fieldLabelModifier opts (G.selName m1)
-      value = mgToJSON opts targs (G.unM1 m1)
+  let key   = fieldLabelModifier opts (selName m1)
+      value = mgToJSON opts targs (unM1 m1)
   in pair <$> (pure key) <*> value
 {-# INLINE mfieldToPair #-}
 
 --------------------------------------------------------------------------------
 
 class MEncodeProduct m arity f where
-    mencodeProduct :: A.Options -> MToArgs m A.Encoding arity a
-                  -> f a -> m (E.Encoding' E.InArray)
+    mencodeProduct :: Options -> MToArgs m Encoding arity a
+                  -> f a -> m (Encoding' InArray)
 
-instance 
+instance
     ( Applicative m
     , MEncodeProduct m arity a
     , MEncodeProduct m arity b
-    ) => MEncodeProduct m arity (a G.:*: b) where
-    mencodeProduct opts targs (a G.:*: b) | A.omitNothingFields opts =
-        fmap (E.econcat . L.intersperse E.comma .
-            filter (not . E.nullEncoding))
+    ) => MEncodeProduct m arity (a :*: b) where
+    mencodeProduct opts targs (a :*: b) | omitNothingFields opts =
+        fmap (econcat . intersperse comma .
+            filter (not . nullEncoding))
         $ sequenceA [mencodeProduct opts targs a, mencodeProduct opts targs b]
-    mencodeProduct opts targs (a G.:*: b) = (E.>*<) <$>
+    mencodeProduct opts targs (a :*: b) = (>*<) <$>
       mencodeProduct opts targs a <*>
       mencodeProduct opts targs b
     {-# INLINE mencodeProduct #-}
 
-instance {-# OVERLAPPABLE #-} (Functor m, MGToJSON m A.Encoding arity a) => MEncodeProduct m arity a where
-    mencodeProduct opts targs a = E.retagEncoding <$> mgToJSON opts targs a
+instance {-# OVERLAPPABLE #-} (Functor m, MGToJSON m Encoding arity a) => MEncodeProduct m arity a where
+    mencodeProduct opts targs a = retagEncoding <$> mgToJSON opts targs a
     {-# INLINE mencodeProduct #-}
 
 ------------------------------------------------------------------------------
@@ -607,31 +623,31 @@ instance ( Functor m
          , MConsToJSON m enc arity a
          , FromPairs enc pairs
          , KeyValuePair enc pairs
-         , G.Constructor c
-         ) => MSumToJSON' m ObjectWithSingleField enc arity (G.C1 c a)
+         , Constructor c
+         ) => MSumToJSON' m ObjectWithSingleField enc arity (C1 c a)
   where
     msumToJSON' opts targs =
       Tagged . fmap (fromPairs . (typ `pair`)) . mgToJSON opts targs
         where
-          typ = A.constructorTagModifier opts $
-                         G.conName (undefined :: t c a p)
+          typ = constructorTagModifier opts $
+                         conName (undefined :: t c a p)
 
 --------------------------------------------------------------------------------
 
 instance {-# OVERLAPPABLE #-}
     ( MConsToJSON m enc arity a
-    ) => MSumToJSON' m UntaggedValue enc arity (G.C1 c a)
+    ) => MSumToJSON' m UntaggedValue enc arity (C1 c a)
   where
     msumToJSON' opts targs = Tagged . mgToJSON opts targs
 
 instance {-# OVERLAPPING #-}
     ( Applicative m
-    , G.Constructor c
+    , Constructor c
     , FromString enc
-    ) => MSumToJSON' m UntaggedValue enc arity (G.C1 c G.U1)
+    ) => MSumToJSON' m UntaggedValue enc arity (C1 c U1)
   where
     msumToJSON' opts _ _ = Tagged . pure . fromString $
-        A.constructorTagModifier opts $ G.conName (undefined :: t c G.U1 p)
+        constructorTagModifier opts $ conName (undefined :: t c U1 p)
 
 --------------------------------------------------------------------------------
 -- Copy of aeson-1.4.2.0, which wasn't availabl in aeson-1.1.2.0
@@ -642,11 +658,11 @@ instance {-# OVERLAPPING #-}
 class Monoid pairs => FromPairs enc pairs | enc -> pairs where
   fromPairs :: pairs -> enc
 
-instance (a ~ A.Value) => FromPairs (E.Encoding' a) A.Series where
-  fromPairs = E.pairs
+instance (a ~ Value) => FromPairs (Encoding' a) Series where
+  fromPairs = pairs
 
-instance FromPairs A.Value (DL.DList A.Pair) where
-  fromPairs = A.object . DL.toList
+instance FromPairs Value (DList Pair) where
+  fromPairs = object . DList.toList
 
 -- | Like 'KeyValue' but the value is already converted to JSON
 -- ('Value' or 'Encoding'), and the result actually represents lists of pairs
@@ -654,18 +670,18 @@ instance FromPairs A.Value (DL.DList A.Pair) where
 class Monoid kv => KeyValuePair v kv where
     pair :: String -> v -> kv
 
-instance (v ~ A.Value) => KeyValuePair v (DL.DList A.Pair) where
-    pair k v = DL.singleton (T.pack k A..= v)
+instance (v ~ Value) => KeyValuePair v (DList Pair) where
+    pair k v = DList.singleton (T.pack k .= v)
 
-instance (e ~ A.Encoding) => KeyValuePair e A.Series where
+instance (e ~ Encoding) => KeyValuePair e Series where
     pair = pairStr
       where
-        pairStr :: String -> A.Encoding -> A.Series
-        pairStr name val = pair' (E.string name) val
+        pairStr :: String -> Encoding -> Series
+        pairStr name val = pair' (string name) val
         {-# INLINE pairStr #-}
 
-        pair' :: E.Encoding' T.Text -> A.Encoding -> A.Series
-        pair' name val = E.Value $ E.retagEncoding $ E.retagEncoding name E.>< E.colon E.>< val
+        pair' :: Encoding' T.Text -> Encoding -> Series
+        pair' name val = Value $ retagEncoding $ retagEncoding name >< colon >< val
 
 #endif
 
@@ -675,14 +691,14 @@ instance (e ~ A.Encoding) => KeyValuePair e A.Series where
 -- #############################################################################
 
 -- | Annotate parsing array with Index of parsing error
-_parseIndexedJSON :: (A.Value -> A.Parser a) -> Int -> A.Value -> A.Parser a
-_parseIndexedJSON p idx value = p value A.<?> A.Index idx
+_parseIndexedJSON :: (Value -> Parser a) -> Int -> Value -> Parser a
+_parseIndexedJSON p idx value = p value <?> Index idx
 
 -- | modified to use a combining function
-_parseIndexedJSONPair :: (a -> b -> c) -> (A.Value -> A.Parser a) -> (A.Value -> A.Parser b) -> Int -> A.Value -> A.Parser c
-_parseIndexedJSONPair f keyParser valParser idx value = p value A.<?> A.Index idx
+_parseIndexedJSONPair :: (a -> b -> c) -> (Value -> Parser a) -> (Value -> Parser b) -> Int -> Value -> Parser c
+_parseIndexedJSONPair f keyParser valParser idx value = p value <?> Index idx
   where
-    p = A.withArray "(k,v)" $ \ab ->
+    p = withArray "(k,v)" $ \ab ->
         let n = V.length ab
         in if n == 2
              then f <$> _parseJSONElemAtIndex keyParser 0 ab
@@ -691,8 +707,8 @@ _parseIndexedJSONPair f keyParser valParser idx value = p value A.<?> A.Index id
                          show n ++ " into a pair"
 
 -- | duplicated because it was not exported
-_parseJSONElemAtIndex :: (A.Value -> A.Parser a) -> Int -> V.Vector A.Value -> A.Parser a
-_parseJSONElemAtIndex p idx ary = p (V.unsafeIndex ary idx) A.<?> A.Index idx
+_parseJSONElemAtIndex :: (Value -> Parser a) -> Int -> V.Vector Value -> Parser a
+_parseJSONElemAtIndex p idx ary = p (V.unsafeIndex ary idx) <?> Index idx
 
 -------------------------------------------------------------------------------
 -- Generics
@@ -703,68 +719,68 @@ class Applicative m => MGFromJSON m arity f where
     -- | This method (applied to 'defaultOptions') is used as the
     -- default generic implementation of 'parseJSON' (if the @arity@ is 'Zero')
     -- or 'liftParseJSON' (if the @arity@ is 'One').
-    mgParseJSON :: A.Options -> MFromArgs m arity a -> A.Value -> A.Parser (m (f a))
+    mgParseJSON :: Options -> MFromArgs m arity a -> Value -> Parser (m (f a))
 
 -- | A 'FromArgs' value either stores nothing (for 'FromJSON') or it stores the
 -- two function arguments that decode occurrences of the type parameter (for
 -- 'FromJSON1').
 data MFromArgs m arity a where
-    MNoFromArgs :: MFromArgs m A.Zero a
-    MFrom1Args  :: (A.Value -> A.Parser (m a)) -> (A.Value -> A.Parser (m [a])) -> MFromArgs m A.One a
+    MNoFromArgs :: MFromArgs m Zero a
+    MFrom1Args  :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> MFromArgs m One a
 
 -- | A configurable generic JSON decoder. This function applied to
 -- 'defaultOptions' is used as the default for 'parseJSON' when the
 -- type is an instance of 'Generic'.
-mgenericParseJSON :: (G.Generic a, MGFromJSON m A.Zero (G.Rep a))
-                 => A.Options -> A.Value -> A.Parser (m a)
-mgenericParseJSON opts = fmap (fmap G.to) . mgParseJSON opts MNoFromArgs
+mgenericParseJSON :: (Generic a, MGFromJSON m Zero (Rep a))
+                 => Options -> Value -> Parser (m a)
+mgenericParseJSON opts = fmap (fmap to) . mgParseJSON opts MNoFromArgs
 
 -- | A configurable generic JSON decoder. This function applied to
 -- 'defaultOptions' is used as the default for 'liftParseJSON' when the
 -- type is an instance of 'Generic1'.
-mgenericLiftParseJSON :: (G.Generic1 f, MGFromJSON m A.One (G.Rep1 f))
-                     => A.Options -> (A.Value -> A.Parser (m a)) -> (A.Value -> A.Parser (m [a]))
-                     -> A.Value -> A.Parser (m (f a))
-mgenericLiftParseJSON opts pj pjl = fmap (fmap G.to1) . mgParseJSON opts (MFrom1Args pj pjl)
+mgenericLiftParseJSON :: (Generic1 f, MGFromJSON m One (Rep1 f))
+                     => Options -> (Value -> Parser (m a)) -> (Value -> Parser (m [a]))
+                     -> Value -> Parser (m (f a))
+mgenericLiftParseJSON opts pj pjl = fmap (fmap to1) . mgParseJSON opts (MFrom1Args pj pjl)
 
 -------------------------------------------------------------------------------
 -- Class
 -------------------------------------------------------------------------------
 
 class Applicative m => MFromJSON m a where
-    mparseJSON :: A.Value -> A.Parser (m a)
+    mparseJSON :: Value -> Parser (m a)
 
-    default mparseJSON :: (G.Generic a, MGFromJSON m A.Zero (G.Rep a)) => A.Value -> A.Parser (m a)
-    mparseJSON = mgenericParseJSON A.defaultOptions
+    default mparseJSON :: (Generic a, MGFromJSON m Zero (Rep a)) => Value -> Parser (m a)
+    mparseJSON = mgenericParseJSON defaultOptions
 
-    mparseJSONList :: A.Value -> A.Parser (m [a])
-    mparseJSONList (A.Array a)
+    mparseJSONList :: Value -> Parser (m [a])
+    mparseJSONList (Array a)
         = fmap sequenceA
         . zipWithM (_parseIndexedJSON mparseJSON) [0..]
         . V.toList
         $ a
 
-    mparseJSONList v = A.typeMismatch "[a]" v
+    mparseJSONList v = typeMismatch "[a]" v
 
 -------------------------------------------------------------------------------
 -- Lifings of FromJSON and ToJSON to unary and binary type constructors
 -------------------------------------------------------------------------------
 
--- | Analogous to 'A.fromJSON1'
+-- | Analogous to 'fromJSON1'
 class Applicative m => MFromJSON1 m f where
-    mliftParseJSON :: (A.Value -> A.Parser (m a)) -> (A.Value -> A.Parser (m [a])) -> A.Value -> A.Parser (m (f a))
+    mliftParseJSON :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m (f a))
 
-    default mliftParseJSON :: (G.Generic1 f, MGFromJSON m A.One (G.Rep1 f))
-                          => (A.Value -> A.Parser (m a)) -> (A.Value -> A.Parser (m [a])) -> A.Value -> A.Parser (m (f a))
-    mliftParseJSON = mgenericLiftParseJSON A.defaultOptions
+    default mliftParseJSON :: (Generic1 f, MGFromJSON m One (Rep1 f))
+                          => (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m (f a))
+    mliftParseJSON = mgenericLiftParseJSON defaultOptions
 
     -- listParser :: (Value -> Parser a) -> Value -> Parser [a]
-    mliftParseJSONList :: (A.Value -> A.Parser (m a)) -> (A.Value -> A.Parser (m [a])) -> A.Value -> A.Parser (m [f a])
-    mliftParseJSONList f g v = sequenceA <$> A.listParser (mliftParseJSON f g) v
+    mliftParseJSONList :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m [f a])
+    mliftParseJSONList f g v = sequenceA <$> listParser (mliftParseJSON f g) v
 
--- | Analogous to 'A.parseJSON1'
+-- | Analogous to 'parseJSON1'
 -- Lift the standard 'parseJSON' function through the type constructor.
-mparseJSON1 :: (MFromJSON1 m f, MFromJSON m a) => A.Value -> A.Parser (m (f a))
+mparseJSON1 :: (MFromJSON1 m f, MFromJSON m a) => Value -> Parser (m (f a))
 mparseJSON1 = mliftParseJSON mparseJSON mparseJSONList
 
 -- -------------------------------------------------------------------------------
@@ -772,9 +788,9 @@ mparseJSON1 = mliftParseJSON mparseJSON mparseJSONList
 -- -------------------------------------------------------------------------------
 
 -- | Helper function to use with 'liftParseJSON'. See 'Data.Aeson.ToJSON.listEncoding'.
-mlistParser :: Applicative m => (A.Value -> A.Parser (m a)) -> A.Value -> A.Parser (m [a])
-mlistParser f (A.Array xs) = fmap (sequenceA . V.toList) (V.mapM f xs)
-mlistParser _ v = A.typeMismatch "[a]" v
+mlistParser :: Applicative m => (Value -> Parser (m a)) -> Value -> Parser (m [a])
+mlistParser f (Array xs) = fmap (sequenceA . V.toList) (V.mapM f xs)
+mlistParser _ v = typeMismatch "[a]" v
 {-# INLINE mlistParser #-}
 
 -------------------------------------------------------------------------------
@@ -789,8 +805,8 @@ mlistParser _ v = A.typeMismatch "[a]" v
 -- in an object for it to be valid.  If the key and value are
 -- optional, use '.:?' instead.
 --
--- based on (A..:)
-retrieve :: (MFromJSON m a) => A.Object -> T.Text -> A.Parser (m a)
+-- based on (.:)
+retrieve :: (MFromJSON m a) => Object -> T.Text -> Parser (m a)
 retrieve = mexplicitParseField mparseJSON
 {-# INLINE retrieve #-}
 
@@ -801,70 +817,70 @@ retrieve = mexplicitParseField mparseJSON
 -- This accessor is most useful if the key and value can be absent
 -- from an object without affecting its validity.  If the key and
 -- value are mandatory, use '.:' instead.
--- based on (A..:?)
-maybeRetrieve :: (Applicative m, MFromJSON m a) => A.Object -> T.Text -> A.Parser (m (Maybe a))
+-- based on (.:?)
+maybeRetrieve :: (Applicative m, MFromJSON m a) => Object -> T.Text -> Parser (m (Maybe a))
 maybeRetrieve = mexplicitParseFieldMaybe mparseJSON
 {-# INLINE maybeRetrieve #-}
 
 -- | Variant of '.:' with explicit parser function.
 --
--- E.g. @'explicitParseField' 'parseJSON1' :: ('FromJSON1' f, 'FromJSON' a) -> 'Object' -> 'Text' -> 'Parser' (f a)@
-mexplicitParseField :: (A.Value -> A.Parser (m a)) -> A.Object -> T.Text -> A.Parser (m a)
+-- g. @'explicitParseField' 'parseJSON1' :: ('FromJSON1' f, 'FromJSON' a) -> 'Object' -> 'Text' -> 'Parser' (f a)@
+mexplicitParseField :: (Value -> Parser (m a)) -> Object -> T.Text -> Parser (m a)
 mexplicitParseField p obj key = case H.lookup key obj of
     Nothing -> fail $ "key " ++ show key ++ " not present"
-    Just v  -> p v A.<?> A.Key key
+    Just v  -> p v <?> Key key
 {-# INLINE mexplicitParseField #-}
 
 -- | Variant of '.:?' with explicit parser function.
-mexplicitParseFieldMaybe :: Applicative m => (A.Value -> A.Parser (m a)) -> A.Object -> T.Text -> A.Parser (m (Maybe a))
+mexplicitParseFieldMaybe :: Applicative m => (Value -> Parser (m a)) -> Object -> T.Text -> Parser (m (Maybe a))
 mexplicitParseFieldMaybe p obj key = case H.lookup key obj of
     Nothing -> pure (pure Nothing)
-    Just v  -> mliftParseJSON p (mlistParser p) v A.<?> A.Key key -- listParser isn't used by maybe instance.
+    Just v  -> mliftParseJSON p (mlistParser p) v <?> Key key -- listParser isn't used by maybe instance.
 {-# INLINE mexplicitParseFieldMaybe #-}
 
 --------------------------------------------------------------------------------
 -- Generic parseJSON
 -------------------------------------------------------------------------------
 
-instance Applicative m => MGFromJSON m arity G.V1 where
+instance Applicative m => MGFromJSON m arity V1 where
     -- Whereof we cannot format, thereof we cannot parse:
     mgParseJSON _ _ _ = fail "Attempted to parse empty type"
 
-instance {-# OVERLAPPABLE #-} (MGFromJSON m arity a) => MGFromJSON m arity (G.M1 i c a) where
+instance {-# OVERLAPPABLE #-} (MGFromJSON m arity a) => MGFromJSON m arity (M1 i c a) where
     -- Meta-information, which is not handled elsewhere, is just added to the
     -- parsed value:
-    mgParseJSON opts fargs = fmap (fmap G.M1) . mgParseJSON opts fargs
+    mgParseJSON opts fargs = fmap (fmap M1) . mgParseJSON opts fargs
 
-instance (MFromJSON m a) => MGFromJSON m arity (G.K1 i a) where
+instance (MFromJSON m a) => MGFromJSON m arity (K1 i a) where
     -- Constant values are decoded using their FromJSON instance:
-    mgParseJSON _opts _ = fmap (fmap G.K1) . mparseJSON
+    mgParseJSON _opts _ = fmap (fmap K1) . mparseJSON
 
-instance Applicative m => MGFromJSON m A.One G.Par1 where
+instance Applicative m => MGFromJSON m One Par1 where
     -- Direct occurrences of the last type parameter are decoded with the
     -- function passed in as an argument:
-    mgParseJSON _opts (MFrom1Args pj _) = fmap (fmap G.Par1) . pj
+    mgParseJSON _opts (MFrom1Args pj _) = fmap (fmap Par1) . pj
 
-instance (Applicative m, MFromJSON1 m f) => MGFromJSON m A.One (G.Rec1 f) where
+instance (Applicative m, MFromJSON1 m f) => MGFromJSON m One (Rec1 f) where
     -- Recursive occurrences of the last type parameter are decoded using their
     -- FromJSON1 instance:
-    mgParseJSON _opts (MFrom1Args pj pjl) = fmap (fmap G.Rec1) . mliftParseJSON pj pjl
+    mgParseJSON _opts (MFrom1Args pj pjl) = fmap (fmap Rec1) . mliftParseJSON pj pjl
 
-instance Applicative m => MGFromJSON m arity G.U1 where
+instance Applicative m => MGFromJSON m arity U1 where
     -- Empty constructors are expected to be encoded as an empty array:
     mgParseJSON _opts _ v
-        | _isEmptyArray v = pure (pure G.U1)
-        | otherwise      = A.typeMismatch "unit constructor (U1)" v
+        | _isEmptyArray v = pure (pure U1)
+        | otherwise      = typeMismatch "unit constructor (U1)" v
       where
         -- | Determines if the 'Value' is an empty 'Array'.
         -- Note that: @isEmptyArray 'emptyArray'@.
-        _isEmptyArray :: A.Value -> Bool
-        _isEmptyArray (A.Array arr) = V.null arr
+        _isEmptyArray :: Value -> Bool
+        _isEmptyArray (Array arr) = V.null arr
         _isEmptyArray _ = False
 
 -- instance ( MConsFromJSON m arity a
---          , AllNullary (G.C1 c a) allNullary
---          , MParseSum m arity (G.C1 c a) allNullary
---          ) => GFromJSON m arity (G.D1 d (G.C1 c a)) where
+--          , AllNullary (C1 c a) allNullary
+--          , MParseSum m arity (C1 c a) allNullary
+--          ) => GFromJSON m arity (D1 d (C1 c a)) where
 --     -- The option 'tagSingleConstructors' determines whether to wrap
 --     -- a single-constructor type.
 --     mgParseJSON opts fargs
@@ -917,8 +933,8 @@ instance Applicative m => MGFromJSON m arity G.U1 where
 --------------------------------------------------------------------------------
 
 class MParseSum m arity f allNullary where
-    mparseSum :: A.Options -> MFromArgs m arity a
-             -> A.Value -> Tagged allNullary (A.Parser (m (f a)))
+    mparseSum :: Options -> MFromArgs m arity a
+             -> Value -> Tagged allNullary (Parser (m (f a)))
 
 -- instance ( MSumFromString m f
 --          , MFromPair m arity f
@@ -937,24 +953,24 @@ class MParseSum m arity f allNullary where
 
 --------------------------------------------------------------------------------
 
-mparseAllNullarySum :: MSumFromString m f => A.Options -> A.Value -> A.Parser (m (f a))
-mparseAllNullarySum opts = A.withText "Text" $ \key ->
+mparseAllNullarySum :: MSumFromString m f => Options -> Value -> Parser (m (f a))
+mparseAllNullarySum opts = withText "Text" $ \key ->
                             maybe (notFound key) pure $
                               mparseSumFromString opts key
 
 class MSumFromString m f where
-    mparseSumFromString :: A.Options -> T.Text -> Maybe (m (f a))
+    mparseSumFromString :: Options -> T.Text -> Maybe (m (f a))
 
-instance (Functor m, MSumFromString m a, MSumFromString m b) => MSumFromString m (a G.:+: b) where
-    mparseSumFromString opts key = (fmap G.L1 <$> mparseSumFromString opts key) <|>
-                                  (fmap G.R1 <$> mparseSumFromString opts key)
+instance (Functor m, MSumFromString m a, MSumFromString m b) => MSumFromString m (a :+: b) where
+    mparseSumFromString opts key = (fmap L1 <$> mparseSumFromString opts key) <|>
+                                  (fmap R1 <$> mparseSumFromString opts key)
 
-instance (Applicative m, G.Constructor c) => MSumFromString m (G.C1 c G.U1) where
-    mparseSumFromString opts key | key == name = Just $ pure $ G.M1 G.U1
+instance (Applicative m, Constructor c) => MSumFromString m (C1 c U1) where
+    mparseSumFromString opts key | key == name = Just $ pure $ M1 U1
                                  | otherwise   = Nothing
         where
-          name = T.pack $ A.constructorTagModifier opts $
-                          G.conName (undefined :: t c G.U1 p)
+          name = T.pack $ constructorTagModifier opts $
+                          conName (undefined :: t c U1 p)
 
 --------------------------------------------------------------------------------
 
@@ -992,42 +1008,42 @@ instance (Applicative m, G.Constructor c) => MSumFromString m (G.C1 c G.U1) wher
 --------------------------------------------------------------------------------
 
 class MFromTaggedObject m arity f where
-    mparseFromTaggedObject :: A.Options -> MFromArgs m arity a
-                          -> String -> A.Object
-                          -> T.Text -> Maybe (A.Parser (m (f a)))
+    mparseFromTaggedObject :: Options -> MFromArgs m arity a
+                          -> String -> Object
+                          -> T.Text -> Maybe (Parser (m (f a)))
 
 instance ( Functor m, MFromTaggedObject m arity a, MFromTaggedObject m arity b) =>
-    MFromTaggedObject m arity (a G.:+: b) where
+    MFromTaggedObject m arity (a :+: b) where
         mparseFromTaggedObject opts fargs contentsFieldName obj tag =
-            (fmap (fmap G.L1) <$> mparseFromTaggedObject opts fargs contentsFieldName obj tag) <|>
-            (fmap (fmap G.R1) <$> mparseFromTaggedObject opts fargs contentsFieldName obj tag)
+            (fmap (fmap L1) <$> mparseFromTaggedObject opts fargs contentsFieldName obj tag) <|>
+            (fmap (fmap R1) <$> mparseFromTaggedObject opts fargs contentsFieldName obj tag)
 
 instance ( Functor m, MFromTaggedObject' m arity f
-         , G.Constructor c
-         ) => MFromTaggedObject m arity (G.C1 c f) where
+         , Constructor c
+         ) => MFromTaggedObject m arity (C1 c f) where
     mparseFromTaggedObject opts fargs contentsFieldName obj tag
-        | tag == name = Just $ (fmap G.M1) <$> mparseFromTaggedObject'
+        | tag == name = Just $ (fmap M1) <$> mparseFromTaggedObject'
                                         opts fargs contentsFieldName obj
         | otherwise = Nothing
         where
-          name = T.pack $ A.constructorTagModifier opts $
-                          G.conName (undefined :: t c f p)
+          name = T.pack $ constructorTagModifier opts $
+                          conName (undefined :: t c f p)
 
 --------------------------------------------------------------------------------
 
 class MFromTaggedObject' m arity f where
-    mparseFromTaggedObject' :: A.Options -> MFromArgs m arity a -> String
-                           -> A.Object -> A.Parser (m (f a))
+    mparseFromTaggedObject' :: Options -> MFromArgs m arity a -> String
+                           -> Object -> Parser (m (f a))
 
 class MFromTaggedObject'' m arity f isRecord where
-    mparseFromTaggedObject'' :: A.Options -> MFromArgs m arity a -> String
-                            -> A.Object -> Tagged isRecord (A.Parser (m (f a)))
+    mparseFromTaggedObject'' :: Options -> MFromArgs m arity a -> String
+                            -> Object -> Tagged isRecord (Parser (m (f a)))
 
 instance ( IsRecord f isRecord
          , MFromTaggedObject'' m arity f isRecord
          ) => MFromTaggedObject' m arity f where
     mparseFromTaggedObject' opts fargs contentsFieldName =
-        (unTagged :: Tagged isRecord (A.Parser (m (f a))) -> A.Parser (m (f a))) .
+        (unTagged :: Tagged isRecord (Parser (m (f a))) -> Parser (m (f a))) .
         mparseFromTaggedObject'' opts fargs contentsFieldName
 
 -- instance (MFromRecord m arity f) => MFromTaggedObject'' m arity f 'True where
@@ -1038,32 +1054,32 @@ instance ( IsRecord f isRecord
 --     parseFromTaggedObject'' opts fargs contentsFieldName = Tagged .
 --       (mgParseJSON opts fargs <=< (.: pack contentsFieldName))
 
-instance {-# OVERLAPPING #-} Applicative m => MFromTaggedObject'' m arity G.U1 'False where
-    mparseFromTaggedObject'' _ _ _ _ = Tagged (pure (pure G.U1))
+instance {-# OVERLAPPING #-} Applicative m => MFromTaggedObject'' m arity U1 'False where
+    mparseFromTaggedObject'' _ _ _ _ = Tagged (pure (pure U1))
 
 --------------------------------------------------------------------------------
 
 class MConsFromJSON m arity f where
-    mconsParseJSON  :: A.Options -> MFromArgs m arity a
-                   -> A.Value -> A.Parser (m (f a))
+    mconsParseJSON  :: Options -> MFromArgs m arity a
+                   -> Value -> Parser (m (f a))
 
 class MConsFromJSON' m arity f isRecord where
-    mconsParseJSON' :: A.Options -> MFromArgs m arity a
-                   -> A.Value -> Tagged isRecord (A.Parser (m (f a)))
+    mconsParseJSON' :: Options -> MFromArgs m arity a
+                   -> Value -> Tagged isRecord (Parser (m (f a)))
 
 instance ( IsRecord f isRecord
          , MConsFromJSON' m arity f isRecord
          ) => MConsFromJSON m arity f where
     mconsParseJSON opts fargs =
-      (unTagged :: Tagged isRecord (A.Parser (m (f a))) -> A.Parser (m (f a)))
+      (unTagged :: Tagged isRecord (Parser (m (f a))) -> Parser (m (f a)))
         . mconsParseJSON' opts fargs
 
--- instance {-# OVERLAPPING #-}
---          ( MGFromJSON m arity a, MFromRecord m arity (G.S1 s a)
---          ) => ConsFromJSON' arity (G.S1 s a) 'True where
---     consParseJSON' opts fargs
---       | unwrapUnaryRecords opts = Tagged . mgParseJSON opts fargs
---       | otherwise = Tagged . withObject "unary record" (mparseRecord opts fargs)
+instance {-# OVERLAPPING #-}
+         ( MGFromJSON m arity a, MFromRecord m arity (S1 s a)
+         ) => MConsFromJSON' m arity (S1 s a) 'True where
+    mconsParseJSON' opts fargs
+      | unwrapUnaryRecords opts = Tagged . mgParseJSON opts fargs
+      | otherwise = Tagged . withObject "unary record" (mparseRecord opts fargs)
 
 -- instance MFromRecord m arity f => ConsFromJSON' m arity f 'True where
 --     mconsParseJSON' opts fargs =
@@ -1075,39 +1091,39 @@ instance MGFromJSON m arity f => MConsFromJSON' m arity f 'False where
 --------------------------------------------------------------------------------
 
 class MFromRecord m arity f where
-    mparseRecord :: A.Options -> MFromArgs m arity a
-                -> A.Object -> A.Parser (m (f a))
+    mparseRecord :: Options -> MFromArgs m arity a
+                -> Object -> Parser (m (f a))
 
 instance
     ( Applicative m
     , MFromRecord m arity a
     , MFromRecord m arity b
-    ) => MFromRecord m arity (a G.:*: b) where
+    ) => MFromRecord m arity (a :*: b) where
     mparseRecord opts fargs obj = getCompose $
-      (G.:*:) <$> Compose (mparseRecord opts fargs obj)
+      (:*:) <$> Compose (mparseRecord opts fargs obj)
             <*> Compose (mparseRecord opts fargs obj)
 
-instance {-# OVERLAPPABLE #-} (G.Selector s, MGFromJSON m arity a) =>
-  MFromRecord m arity (G.S1 s a) where
+instance {-# OVERLAPPABLE #-} (Selector s, MGFromJSON m arity a) =>
+  MFromRecord m arity (S1 s a) where
     mparseRecord opts fargs =
-      (A.<?> A.Key label) . mgParseJSON opts fargs <=< (A..: label)
+      (<?> Key label) . mgParseJSON opts fargs <=< (.: label)
         where
-          label = T.pack . A.fieldLabelModifier opts $ G.selName (undefined :: t s a p)
+          label = T.pack . fieldLabelModifier opts $ selName (undefined :: t s a p)
 
-instance {-# INCOHERENT #-} (G.Selector s, MFromJSON m a) =>
-  MFromRecord m arity (G.S1 s (G.K1 i (Maybe a))) where
-    mparseRecord opts _ obj = fmap (G.M1 . G.K1) <$> obj `maybeRetrieve` T.pack label
+instance {-# INCOHERENT #-} (Selector s, MFromJSON m a) =>
+  MFromRecord m arity (S1 s (K1 i (Maybe a))) where
+    mparseRecord opts _ obj = fmap (M1 . K1) <$> obj `maybeRetrieve` T.pack label
         where
-          label = A.fieldLabelModifier opts $
-                    G.selName (undefined :: t s (G.K1 i (Maybe a)) p)
+          label = fieldLabelModifier opts $
+                    selName (undefined :: t s (K1 i (Maybe a)) p)
 
 -- Parse an Option like a Maybe.
-instance {-# INCOHERENT #-} (G.Selector s, MFromJSON m a) =>
-  MFromRecord m arity (G.S1 s (G.K1 i (Data.Semigroup.Option a))) where
+instance {-# INCOHERENT #-} (Selector s, MFromJSON m a) =>
+  MFromRecord m arity (S1 s (K1 i (Semigroup.Option a))) where
     mparseRecord opts fargs obj = fmap wrap <$> mparseRecord opts fargs obj
       where
-        wrap :: G.S1 s (G.K1 i (Maybe a)) p -> G.S1 s (G.K1 i (Data.Semigroup.Option a)) p
-        wrap (G.M1 (G.K1 a)) = G.M1 (G.K1 (Data.Semigroup.Option a))
+        wrap :: S1 s (K1 i (Maybe a)) p -> S1 s (K1 i (Semigroup.Option a)) p
+        wrap (M1 (K1 a)) = M1 (K1 (Semigroup.Option a))
 
 --------------------------------------------------------------------------------
 
@@ -1134,27 +1150,27 @@ instance {-# INCOHERENT #-} (G.Selector s, MFromJSON m a) =>
 --------------------------------------------------------------------------------
 
 class MFromPair m arity f where
-    mparsePair :: A.Options -> MFromArgs m arity a
-              -> A.Pair -> Maybe (A.Parser (m (f a)))
+    mparsePair :: Options -> MFromArgs m arity a
+              -> Pair -> Maybe (Parser (m (f a)))
 
 instance
     ( Functor m
     , MFromPair m arity a
     , MFromPair m arity b
-    ) => MFromPair m arity (a G.:+: b) where
-    mparsePair opts fargs pr = (fmap (fmap G.L1) <$> mparsePair opts fargs pr) <|>
-                                (fmap (fmap G.R1) <$> mparsePair opts fargs pr)
+    ) => MFromPair m arity (a :+: b) where
+    mparsePair opts fargs pr = (fmap (fmap L1) <$> mparsePair opts fargs pr) <|>
+                                (fmap (fmap R1) <$> mparsePair opts fargs pr)
 
--- instance ( G.Constructor c
+-- instance ( Constructor c
 --          , MGFromJSON m arity a
 --          , MConsFromJSON m arity a
---          ) => MFromPair m arity (G.C1 c a) where
+--          ) => MFromPair m arity (C1 c a) where
 --     mparsePair opts fargs (tag, value)
 --         | tag == tag' = Just $ mgParseJSON opts fargs value
 --         | otherwise   = Nothing
 --         where
---           tag' = T.pack $ A.constructorTagModifier opts $
---                           G.conName (undefined :: t c a p)
+--           tag' = T.pack $ constructorTagModifier opts $
+--                           conName (undefined :: t c a p)
 
 -- --------------------------------------------------------------------------------
 
@@ -1191,7 +1207,7 @@ instance
 
 --------------------------------------------------------------------------------
 
-notFound :: T.Text -> A.Parser a
+notFound :: T.Text -> Parser a
 notFound key = fail $ "The key \"" ++ T.unpack key ++ "\" was not found"
 {-# INLINE notFound #-}
 
@@ -1216,43 +1232,43 @@ instance Applicative m => MFromJSON1 m [] where
 
 instance Applicative m => MToJSON1 m Maybe where
     mliftToEncoding t _ (Just a) = t a
-    mliftToEncoding _  _ Nothing  = pure E.null_
+    mliftToEncoding _  _ Nothing  = pure null_
 
 instance Applicative m => MFromJSON1 m Maybe where
-    mliftParseJSON _ _ A.Null = pure (pure Nothing)
+    mliftParseJSON _ _ Null = pure (pure Nothing)
     mliftParseJSON p _ a    = fmap Just <$> p a
 
-instance (Applicative m, A.ToJSONKey k) => MToJSON1 m (M.Map k) where
-    mliftToEncoding g _ = case A.toJSONKey of
-        A.ToJSONKeyText _ f -> mdictEncoding f g M.foldrWithKey
-        A.ToJSONKeyValue _ f -> mlistEncoding (pairEncoding f) . M.toList
+instance (Applicative m, ToJSONKey k) => MToJSON1 m (M.Map k) where
+    mliftToEncoding g _ = case toJSONKey of
+        ToJSONKeyText _ f -> mdictEncoding f g M.foldrWithKey
+        ToJSONKeyValue _ f -> mlistEncoding (pairEncoding f) . M.toList
       where
         pairEncoding f (a, b) = mlistEncoding id [pure $ f a, g b]
 
-instance (Applicative m, A.FromJSONKey k, Ord k) => MFromJSON1 m (M.Map k) where
-    mliftParseJSON p _ = case A.fromJSONKey of
-        A.FromJSONKeyCoerce _ -> A.withObject "Map k v" $
+instance (Applicative m, FromJSONKey k, Ord k) => MFromJSON1 m (M.Map k) where
+    mliftParseJSON p _ = case fromJSONKey of
+        FromJSONKeyCoerce _ -> withObject "Map k v" $
             H.foldrWithKey (\k v m -> getCompose $ M.insert
-                <$> (Compose $ (pure . pure $ unsafeCoerce k) A.<?> A.Key k)
-                <*> (Compose $ p v A.<?> A.Key k)
+                <$> (Compose $ (pure . pure $ unsafeCoerce k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
                 <*> Compose m)
                 (pure $ pure M.empty)
 
-        A.FromJSONKeyText f -> A.withObject "Map k v" $
+        FromJSONKeyText f -> withObject "Map k v" $
             H.foldrWithKey (\k v m -> getCompose $ M.insert
-                <$> (Compose $ (pure . pure $ f k) A.<?> A.Key k)
-                <*> (Compose $ p v A.<?> A.Key k)
+                <$> (Compose $ (pure . pure $ f k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
                 <*> Compose m)
                 (pure $ pure M.empty)
 
-        A.FromJSONKeyTextParser f -> A.withObject "Map k v" $
+        FromJSONKeyTextParser f -> withObject "Map k v" $
             H.foldrWithKey (\k v m -> getCompose $ M.insert
-                <$> (Compose $ (pure <$> f k) A.<?> A.Key k)
-                <*> (Compose $ p v A.<?> A.Key k)
+                <$> (Compose $ (pure <$> f k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
                 <*> Compose m)
                 (pure $ pure M.empty)
 
-        A.FromJSONKeyValue f -> A.withArray "Map k v" $ \arr ->
+        FromJSONKeyValue f -> withArray "Map k v" $ \arr ->
             getCompose $ M.fromList <$> (
                 -- [Compose (a, b)] -> Compose [(a, b)]
                 sequenceA
@@ -1266,52 +1282,52 @@ instance (Applicative m, A.FromJSONKey k, Ord k) => MFromJSON1 m (M.Map k) where
 -- -----------------------------------------------------
 
 instance Applicative m => MToJSON m Bool where
-    mtoEncoding = pure . A.toEncoding
+    mtoEncoding = pure . toEncoding
 
 instance Applicative m => MFromJSON m Bool where
-    mparseJSON = fmap pure . A.parseJSON
+    mparseJSON = fmap pure . parseJSON
 
 instance Applicative m => MToJSON m Char where
-    mtoEncoding = pure . A.toEncoding
+    mtoEncoding = pure . toEncoding
 
 instance Applicative m => MFromJSON m Char where
-    mparseJSON = fmap pure . A.parseJSON
+    mparseJSON = fmap pure . parseJSON
 
 instance Applicative m => MToJSON m T.Text where
-    mtoEncoding = pure . A.toEncoding
+    mtoEncoding = pure . toEncoding
 
 instance Applicative m => MFromJSON m T.Text where
-    mparseJSON = fmap pure . A.parseJSON
+    mparseJSON = fmap pure . parseJSON
 
 instance Applicative m => MToJSON m Scientific where
-    mtoEncoding = pure . A.toEncoding
+    mtoEncoding = pure . toEncoding
 
 instance Applicative m => MFromJSON m Scientific where
-    mparseJSON = fmap pure . A.parseJSON
+    mparseJSON = fmap pure . parseJSON
 
-instance Applicative m => MToJSON m A.Value where
-    mtoEncoding = pure . A.toEncoding
+instance Applicative m => MToJSON m Value where
+    mtoEncoding = pure . toEncoding
 
-instance Applicative m => MFromJSON m A.Value where
-    mparseJSON = fmap pure . A.parseJSON
+instance Applicative m => MFromJSON m Value where
+    mparseJSON = fmap pure . parseJSON
 
 instance Applicative m => MToJSON m Int where
-    mtoEncoding = pure . A.toEncoding
+    mtoEncoding = pure . toEncoding
 
 instance Applicative m => MFromJSON m Int where
-    mparseJSON = fmap pure . A.parseJSON
+    mparseJSON = fmap pure . parseJSON
 
-instance Applicative m => MToJSON m A.Array where
-    mtoEncoding = pure . A.toEncoding
+instance Applicative m => MToJSON m Array where
+    mtoEncoding = pure . toEncoding
 
-instance Applicative m => MToJSON m A.Object where
-    mtoEncoding = pure . A.toEncoding
+instance Applicative m => MToJSON m Object where
+    mtoEncoding = pure . toEncoding
 
 instance MToJSON m a => MToJSON m [a] where
     {-# SPECIALIZE instance Applicative m => MToJSON m String #-}
     {-# SPECIALIZE instance Applicative m => MToJSON m [String] #-}
-    {-# SPECIALIZE instance Applicative m => MToJSON m [A.Array] #-}
-    {-# SPECIALIZE instance Applicative m => MToJSON m [A.Object] #-}
+    {-# SPECIALIZE instance Applicative m => MToJSON m [Array] #-}
+    {-# SPECIALIZE instance Applicative m => MToJSON m [Object] #-}
 
     mtoEncoding = mtoEncoding1
     {-# INLINE mtoEncoding #-}
@@ -1319,10 +1335,10 @@ instance MToJSON m a => MToJSON m [a] where
 instance MFromJSON m a => MFromJSON m [a] where
     mparseJSON = mparseJSON1
 
-instance (MToJSON m a, A.ToJSONKey k) => MToJSON m (M.Map k a) where
+instance (MToJSON m a, ToJSONKey k) => MToJSON m (M.Map k a) where
     mtoEncoding = mtoEncoding1
 
-instance (MFromJSON m a, A.FromJSONKey k, Ord k) => MFromJSON m (M.Map k a) where
+instance (MFromJSON m a, FromJSONKey k, Ord k) => MFromJSON m (M.Map k a) where
     mparseJSON = mparseJSON1
 
 instance (MToJSON m a) => MToJSON m (Maybe a) where
