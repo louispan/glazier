@@ -1006,9 +1006,9 @@ instance Applicative m => MToJSON m Scientific where
 --     mtoEncoding = mtoEncoding1
 --     {-# INLINE mtoEncoding #-}
 
--- -------------------------------------------------------------------------------
--- -- containers
--- -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- containers
+-------------------------------------------------------------------------------
 
 -- instance MToJSON1 m Seq.Seq where
 --     mliftToEncoding t _ = listEncoding t . toList
@@ -1071,55 +1071,60 @@ instance (MToJSON m v, ToJSONKey k) => MToJSON m (M.Map k v) where
 --     mtoEncoding = mtoEncoding1
 --     {-# INLINE mtoEncoding #-}
 
--- -------------------------------------------------------------------------------
--- -- uuid
--- -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- uuid
+-------------------------------------------------------------------------------
 
--- instance Applicative m => MToJSON m UUID.UUID where
---     mtoEncoding = pure . toEncoding
+instance Applicative m => MToJSON m UUID.UUID where
+    mtoEncoding = pure . toEncoding
 
--- -------------------------------------------------------------------------------
--- -- vector
--- -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- vector
+-------------------------------------------------------------------------------
+
+instance {-# OVERLAPPING #-} Applicative m => MToJSON m Array where
+    mtoEncoding = pure . toEncoding
+    {-# INLINE mtoEncoding #-}
 
 instance Applicative m => MToJSON1 m Vector where
     mliftToEncoding t _ =  mlistEncoding t . V.toList
     {-# INLINE mliftToEncoding #-}
 
 instance (MToJSON m a) => MToJSON m (Vector a) where
-    {-# SPECIALIZE instance Applicative m => MToJSON m Array #-}
-
     mtoEncoding = mtoEncoding1
     {-# INLINE mtoEncoding #-}
 
--- encodeVector :: (MToJSON m a, VG.Vector v a) => v a -> Encoding
--- encodeVector = listEncoding mtoEncoding . VG.toList
--- {-# INLINE encodeVector #-}
+-- mencodeVector :: (MToJSON m a, VG.Vector v a) => v a -> m Encoding
+-- mencodeVector = mlistEncoding mtoEncoding . VG.toList
+-- {-# INLINE mencodeVector #-}
 
--- vectorToJSON :: (VG.Vector v a, MToJSON m a) => v a -> Value
--- vectorToJSON = Array . V.map toJSON . V.convert
--- {-# INLINE vectorToJSON #-}
+-- -- vectorToJSON :: (VG.Vector v a, MToJSON m a) => v a -> Value
+-- -- vectorToJSON = Array . V.map toJSON . V.convert
+-- -- {-# INLINE vectorToJSON #-}
 
 -- instance (Storable a, MToJSON m a) => MToJSON m (VS.Vector a) where
---     mtoEncoding = encodeVector
+--     mtoEncoding = mencodeVector
 --     {-# INLINE mtoEncoding #-}
 
 
 -- instance (VP.Prim a, MToJSON m a) => MToJSON m (VP.Vector a) where
---     mtoEncoding = encodeVector
+--     mtoEncoding = mencodeVector
 --     {-# INLINE mtoEncoding #-}
 
 
 -- instance (VG.Vector VU.Vector a, MToJSON m a) => MToJSON m (VU.Vector a) where
---     mtoEncoding = encodeVector
+--     mtoEncoding = mencodeVector
 --     {-# INLINE mtoEncoding #-}
 
--- -------------------------------------------------------------------------------
--- -- unordered-containers
--- -------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+-- unordered-containers
+-------------------------------------------------------------------------------
+instance {-# OVERLAPPING #-} Applicative m => MToJSON m Object where
+    mtoEncoding = pure . toEncoding
+    {-# INLINE mtoEncoding #-}
 
--- instance MToJSON1 m HashSet.HashSet where
---     mliftToEncoding t _ = listEncoding t . HashSet.toList
+-- instance Applicative m => MToJSON1 m HashSet.HashSet where
+--     mliftToEncoding t _ = mlistEncoding t . HashSet.toList
 --     {-# INLINE mliftToEncoding #-}
 
 -- instance (MToJSON m a) => MToJSON m (HashSet.HashSet a) where
@@ -1135,8 +1140,6 @@ instance (Applicative m, ToJSONKey k) => MToJSON1 m (H.HashMap k) where
     {-# INLINE mliftToEncoding #-}
 
 instance (MToJSON m v, ToJSONKey k) => MToJSON m (H.HashMap k v) where
-    {-# SPECIALIZE instance Applicative m => MToJSON m Object #-}
-
     mtoEncoding = mtoEncoding1
     {-# INLINE mtoEncoding #-}
 
@@ -1614,9 +1617,5 @@ instance Applicative m => MToJSON m DotNetTime where
 -- instance (MToJSON m a, MToJSON m b, MToJSON m c, MToJSON m d, MToJSON m e, MToJSON m f, MToJSON m g, MToJSON m h, MToJSON m i, MToJSON m j, MToJSON m k, MToJSON m l, MToJSON m m, MToJSON m n, MToJSON m o) => MToJSON m (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) where
 --     mtoEncoding = mtoEncoding2
 --     {-# INLINE mtoEncoding #-}
-
-
-
-
 
 
