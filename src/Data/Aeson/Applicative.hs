@@ -1,27 +1,29 @@
 module Data.Aeson.Applicative
-    ( MToJSON(..)
-    , MToJSON1(..)
-    , mtoEncoding1
-    , mlistEncoding
-    , mdictEncoding
-    , MToJSON2(..)
-    , mtoEncoding2
-    , MGToJSON(..)
-    , MToArgs(..)
-    , mgenericToEncoding
-    , mgenericLiftToEncoding
-    
-    , MFromJSON(..)
-    , MFromJSON1(..)
-    , mparseJSON1
-    , MFromJSON2(..)
-    , mparseJSON2
-    , mlistParser
-    , mparseFieldMaybe
-    , MGFromJSON(..)
-    , MFromArgs(..)
-    , mgenericParseJSON
-    , mgenericLiftParseJSON
+    (
+      -- * ToJSON
+      AToJSON(..)
+    , AToJSON1(..)
+    , atoEncoding1
+    , alistEncoding
+    , adictEncoding
+    , AToJSON2(..)
+    , atoEncoding2
+    , AGToJSON(..)
+    , AToArgs(..)
+    , agenericToEncoding
+    , agenericLiftToEncoding
+      -- * FromJSON
+    , AFromJSON(..)
+    , AFromJSON1(..)
+    , aparseJSON1
+    , AFromJSON2(..)
+    , aparseJSON2
+    , alistParser
+    , aparseFieldMaybe
+    , AGFromJSON(..)
+    , AFromArgs(..)
+    , agenericParseJSON
+    , agenericLiftParseJSON
     ) where
 
 import Data.Aeson.Applicative.Internal.ToJSON

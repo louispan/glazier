@@ -9,103 +9,80 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Data.Aeson.Applicative.Internal.FromJSON where
 
-import Prelude.Compat
-
+import Control.Applicative (Const(..), (<|>))
+import Control.Monad (zipWithM, (<=<))
 import Data.Aeson
 import Data.Aeson.Applicative.Internal.Generic
-import Data.Aeson.Encoding.Internal
-    ( Encoding
-    , Encoding'(..)
-    , InArray
-    , Series(..)
-    , closeBracket
-    , colon
-    , comma
-    , econcat
-    , emptyArray_
-    , list
-    , nullEncoding
-    , null_
-    , openBracket
-    , retagEncoding
-    , string
-    , (>*<)
-    , (><)
-    )
 import Data.Aeson.Internal
 import Data.Aeson.Types
-import Control.Applicative ((<|>), Const(..))
-import Control.Monad ((<=<), zipWithM)
 import Data.Bits (unsafeShiftR)
+import qualified Data.DList as DList
 import Data.Fixed (Fixed, HasResolution)
 import Data.Functor.Compose (Compose(..))
 import Data.Functor.Identity (Identity(..))
 import Data.Functor.Product (Product(..))
 import Data.Functor.Sum (Sum(..))
 import Data.Hashable (Hashable(..))
-import Data.Int (Int16, Int32, Int64, Int8)
-import Data.List.NonEmpty (NonEmpty(..))
-import Data.Maybe (fromMaybe)
-import Data.Semigroup ((<>))
-import Data.Proxy (Proxy(..))
-import Data.Ratio ((%), Ratio)
-import Data.Scientific (Scientific, base10Exponent)
-import Data.Tagged (Tagged(..))
-import Data.Text (Text, pack, unpack)
-import Data.Time (Day, DiffTime, LocalTime, NominalDiffTime, TimeOfDay, UTCTime, ZonedTime)
-import Data.Time.Format (parseTime)
-import Data.Time.Locale.Compat (defaultTimeLocale)
-import Data.Traversable as Tr (sequence)
-import Data.Vector (Vector)
-import Data.Version (Version, parseVersion)
-import Data.Void (Void)
-import Data.Word (Word16, Word32, Word64, Word8)
-import Foreign.Storable (Storable)
-import Foreign.C.Types (CTime (..))
-import GHC.Generics
-import Numeric.Natural (Natural)
-import Text.ParserCombinators.ReadP (readP_to_S)
-import Unsafe.Coerce (unsafeCoerce)
-import qualified Data.Attoparsec.ByteString.Char8 as A (endOfInput, parseOnly, scientific)
-import qualified Data.DList as DList
 import qualified Data.HashMap.Strict as H
 import qualified Data.HashSet as HashSet
+import Data.Int (Int16, Int32, Int64, Int8)
 import qualified Data.IntMap as IntMap
 import qualified Data.IntSet as IntSet
+import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.Map as M
+import Data.Maybe (fromMaybe)
 import qualified Data.Monoid as Monoid
-import qualified Data.Scientific as Scientific
+import Data.Proxy (Proxy(..))
+import Data.Ratio (Ratio)
+import Data.Scientific (Scientific, base10Exponent)
 import qualified Data.Semigroup as Semigroup
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
+import Data.Tagged (Tagged(..))
+import Data.Text (Text, pack, unpack)
 import qualified Data.Text.Lazy as LT
+import Data.Time
+    ( Day
+    , DiffTime
+    , LocalTime
+    , NominalDiffTime
+    , TimeOfDay
+    , UTCTime
+    , ZonedTime
+    )
 import qualified Data.Tree as Tree
 import qualified Data.UUID.Types as UUID
+import Data.Vector (Vector)
 import qualified Data.Vector as V
 import qualified Data.Vector.Generic as VG
 import qualified Data.Vector.Primitive as VP
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Unboxed as VU
-
-import qualified GHC.Exts as Exts
-import qualified Data.Primitive.Array as PM
-import qualified Data.Primitive.Types as PM
+import Data.Version (Version)
+import Data.Void (Void)
+import Data.Word (Word16, Word32, Word64, Word8)
+import Foreign.C.Types (CTime(..))
+import Foreign.Storable (Storable)
+import GHC.Generics
+import Numeric.Natural (Natural)
+import Unsafe.Coerce (unsafeCoerce)
 
 #if MIN_VERSION_primitive(0,6,4)
+import qualified GHC.Exts as Exts
+import qualified Data.Primitive.PrimArray as PM
 import qualified Data.Primitive.SmallArray as PM
 import qualified Data.Primitive.UnliftedArray as PM
-import qualified Data.Primitive.PrimArray as PM
 #endif
 
 -- Based on aeson-1.4.2.0
@@ -139,73 +116,73 @@ _parseJSONElemAtIndex p idx ary = p (V.unsafeIndex ary idx) <?> Index idx
 -------------------------------------------------------------------------------
 
 -- | Class of generic representation types that can be converted from JSON.
-class Applicative m => MGFromJSON m arity f where
+class Applicative m => AGFromJSON m arity f where
     -- | This method (applied to 'defaultOptions') is used as the
     -- default generic implementation of 'parseJSON' (if the @arity@ is 'Zero')
     -- or 'liftParseJSON' (if the @arity@ is 'One').
-    mgParseJSON :: Options -> MFromArgs m arity a -> Value -> Parser (m (f a))
+    agParseJSON :: Options -> AFromArgs m arity a -> Value -> Parser (m (f a))
 
 -- | A 'FromArgs' value either stores nothing (for 'FromJSON') or it stores the
 -- two function arguments that decode occurrences of the type parameter (for
 -- 'FromJSON1').
-data MFromArgs m arity a where
-    MNoFromArgs :: MFromArgs m Zero a
-    MFrom1Args  :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> MFromArgs m One a
+data AFromArgs m arity a where
+    ANoFromArgs :: AFromArgs m Zero a
+    AFrom1Args  :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> AFromArgs m One a
 
 -- | A configurable generic JSON decoder. This function applied to
 -- 'defaultOptions' is used as the default for 'parseJSON' when the
 -- type is an instance of 'Generic'.
-mgenericParseJSON :: (Generic a, MGFromJSON m Zero (Rep a))
+agenericParseJSON :: (Generic a, AGFromJSON m Zero (Rep a))
                  => Options -> Value -> Parser (m a)
-mgenericParseJSON opts = fmap (fmap to) . mgParseJSON opts MNoFromArgs
+agenericParseJSON opts = fmap (fmap to) . agParseJSON opts ANoFromArgs
 
 -- | A configurable generic JSON decoder. This function applied to
 -- 'defaultOptions' is used as the default for 'liftParseJSON' when the
 -- type is an instance of 'Generic1'.
-mgenericLiftParseJSON :: (Generic1 f, MGFromJSON m One (Rep1 f))
+agenericLiftParseJSON :: (Generic1 f, AGFromJSON m One (Rep1 f))
                      => Options -> (Value -> Parser (m a)) -> (Value -> Parser (m [a]))
                      -> Value -> Parser (m (f a))
-mgenericLiftParseJSON opts pj pjl = fmap (fmap to1) . mgParseJSON opts (MFrom1Args pj pjl)
+agenericLiftParseJSON opts pj pjl = fmap (fmap to1) . agParseJSON opts (AFrom1Args pj pjl)
 
 -------------------------------------------------------------------------------
 -- Class
 -------------------------------------------------------------------------------
 
-class Applicative m => MFromJSON m a where
-    mparseJSON :: Value -> Parser (m a)
+class Applicative m => AFromJSON m a where
+    aparseJSON :: Value -> Parser (m a)
 
-    default mparseJSON :: (Generic a, MGFromJSON m Zero (Rep a)) => Value -> Parser (m a)
-    mparseJSON = mgenericParseJSON defaultOptions
+    default aparseJSON :: (Generic a, AGFromJSON m Zero (Rep a)) => Value -> Parser (m a)
+    aparseJSON = agenericParseJSON defaultOptions
 
-    mparseJSONList :: Value -> Parser (m [a])
-    mparseJSONList (Array a)
+    aparseJSONList :: Value -> Parser (m [a])
+    aparseJSONList (Array a)
         = fmap sequenceA
-        . zipWithM (_parseIndexedJSON mparseJSON) [0..]
+        . zipWithM (_parseIndexedJSON aparseJSON) [0..]
         . V.toList
         $ a
 
-    mparseJSONList v = typeMismatch "[a]" v
+    aparseJSONList v = typeMismatch "[a]" v
 
 -------------------------------------------------------------------------------
 -- Lifings of FromJSON and ToJSON to unary and binary type constructors
 -------------------------------------------------------------------------------
 
 -- | Analogous to 'fromJSON1'
-class Applicative m => MFromJSON1 m f where
-    mliftParseJSON :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m (f a))
+class Applicative m => AFromJSON1 m f where
+    aliftParseJSON :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m (f a))
 
-    default mliftParseJSON :: (Generic1 f, MGFromJSON m One (Rep1 f))
+    default aliftParseJSON :: (Generic1 f, AGFromJSON m One (Rep1 f))
                           => (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m (f a))
-    mliftParseJSON = mgenericLiftParseJSON defaultOptions
+    aliftParseJSON = agenericLiftParseJSON defaultOptions
 
     -- listParser :: (Value -> Parser a) -> Value -> Parser [a]
-    mliftParseJSONList :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m [f a])
-    mliftParseJSONList f g v = sequenceA <$> listParser (mliftParseJSON f g) v
+    aliftParseJSONList :: (Value -> Parser (m a)) -> (Value -> Parser (m [a])) -> Value -> Parser (m [f a])
+    aliftParseJSONList f g v = sequenceA <$> listParser (aliftParseJSON f g) v
 
 -- | Analogous to 'parseJSON1'
 -- Lift the standard 'parseJSON' function through the type constructor.
-mparseJSON1 :: (MFromJSON1 m f, MFromJSON m a) => Value -> Parser (m (f a))
-mparseJSON1 = mliftParseJSON mparseJSON mparseJSONList
+aparseJSON1 :: (AFromJSON1 m f, AFromJSON m a) => Value -> Parser (m (f a))
+aparseJSON1 = aliftParseJSON aparseJSON aparseJSONList
 
 -- | Lifting of the 'FromJSON' class to binary type constructors.
 --
@@ -214,48 +191,48 @@ mparseJSON1 = mliftParseJSON mparseJSON mparseJSONList
 
 -- The compiler cannot provide a default generic implementation for 'liftParseJSON2',
 -- unlike 'parseJSON' and 'liftParseJSON'.
-class Applicative m => MFromJSON2 m f where
-    mliftParseJSON2
+class Applicative m => AFromJSON2 m f where
+    aliftParseJSON2
         :: (Value -> Parser (m a))
         -> (Value -> Parser (m [a]))
         -> (Value -> Parser (m b))
         -> (Value -> Parser (m [b]))
         -> Value -> Parser (m (f a b))
-    mliftParseJSONList2
+    aliftParseJSONList2
         :: (Value -> Parser (m a))
         -> (Value -> Parser (m [a]))
         -> (Value -> Parser (m b))
         -> (Value -> Parser (m [b]))
         -> Value -> Parser (m [f a b])
-    mliftParseJSONList2 fa ga fb gb v = case v of
-        Array vals -> fmap (fmap V.toList . sequenceA) $ V.mapM (mliftParseJSON2 fa ga fb gb) vals
+    aliftParseJSONList2 fa ga fb gb v = case v of
+        Array vals -> fmap (fmap V.toList . sequenceA) $ V.mapM (aliftParseJSON2 fa ga fb gb) vals
         _ -> typeMismatch "[a]" v
 
 -- | Lift the standard 'parseJSON' function through the type constructor.
-mparseJSON2 :: (MFromJSON2 m f, MFromJSON m a, MFromJSON m b) => Value -> Parser (m (f a b))
-mparseJSON2 = mliftParseJSON2 mparseJSON mparseJSONList mparseJSON mparseJSONList
-{-# INLINE mparseJSON2 #-}
+aparseJSON2 :: (AFromJSON2 m f, AFromJSON m a, AFromJSON m b) => Value -> Parser (m (f a b))
+aparseJSON2 = aliftParseJSON2 aparseJSON aparseJSONList aparseJSON aparseJSONList
+{-# INLINE aparseJSON2 #-}
 
 -- -------------------------------------------------------------------------------
 -- -- List functions
 -- -------------------------------------------------------------------------------
 
 -- | Helper function to use with 'liftParseJSON'. See 'Data.Aeson.ToJSON.listEncoding'.
-mlistParser :: Applicative m => (Value -> Parser (m a)) -> Value -> Parser (m [a])
-mlistParser f (Array xs) = fmap (sequenceA . V.toList) (V.mapM f xs)
-mlistParser _ v = typeMismatch "[a]" v
-{-# INLINE mlistParser #-}
+alistParser :: Applicative m => (Value -> Parser (m a)) -> Value -> Parser (m [a])
+alistParser f (Array xs) = fmap (sequenceA . V.toList) (V.mapM f xs)
+alistParser _ v = typeMismatch "[a]" v
+{-# INLINE alistParser #-}
 
 -------------------------------------------------------------------------------
 -- [] instances
 -------------------------------------------------------------------------------
 
-instance Applicative m => MFromJSON1 m [] where
-    mliftParseJSON _ p' = p'
-    {-# INLINE mliftParseJSON #-}
+instance Applicative m => AFromJSON1 m [] where
+    aliftParseJSON _ p' = p'
+    {-# INLINE aliftParseJSON #-}
 
-instance MFromJSON m a => MFromJSON m [a] where
-    mparseJSON = mparseJSON1
+instance AFromJSON m a => AFromJSON m [a] where
+    aparseJSON = aparseJSON1
 
 -------------------------------------------------------------------------------
 -- Functions
@@ -269,47 +246,47 @@ instance MFromJSON m a => MFromJSON m [a] where
 -- from an object without affecting its validity.  If the key and
 -- value are mandatory, use '.:' instead.
 -- based on (.:?)
-mparseFieldMaybe :: (Applicative m, MFromJSON m a) => Object -> Text -> Parser (m (Maybe a))
-mparseFieldMaybe = mexplicitParseFieldMaybe mparseJSON
-{-# INLINE mparseFieldMaybe #-}
+aparseFieldMaybe :: (Applicative m, AFromJSON m a) => Object -> Text -> Parser (m (Maybe a))
+aparseFieldMaybe = aexplicitParseFieldMaybe aparseJSON
+{-# INLINE aparseFieldMaybe #-}
 
 -- | Variant of '.:?' with explicit parser function.
-mexplicitParseFieldMaybe :: Applicative m => (Value -> Parser (m a)) -> Object -> Text -> Parser (m (Maybe a))
-mexplicitParseFieldMaybe p obj key = case H.lookup key obj of
+aexplicitParseFieldMaybe :: Applicative m => (Value -> Parser (m a)) -> Object -> Text -> Parser (m (Maybe a))
+aexplicitParseFieldMaybe p obj key = case H.lookup key obj of
     Nothing -> pure (pure Nothing)
-    Just v  -> mliftParseJSON p (mlistParser p) v <?> Key key -- listParser isn't used by maybe instance.
-{-# INLINE mexplicitParseFieldMaybe #-}
+    Just v  -> aliftParseJSON p (alistParser p) v <?> Key key -- listParser isn't used by maybe instance.
+{-# INLINE aexplicitParseFieldMaybe #-}
 
 --------------------------------------------------------------------------------
 -- Generic parseJSON
 -------------------------------------------------------------------------------
 
-instance Applicative m => MGFromJSON m arity V1 where
+instance Applicative m => AGFromJSON m arity V1 where
     -- Whereof we cannot format, thereof we cannot parse:
-    mgParseJSON _ _ _ = fail "Attempted to parse empty type"
+    agParseJSON _ _ _ = fail "Attempted to parse empty type"
 
-instance {-# OVERLAPPABLE #-} (MGFromJSON m arity a) => MGFromJSON m arity (M1 i c a) where
+instance {-# OVERLAPPABLE #-} (AGFromJSON m arity a) => AGFromJSON m arity (M1 i c a) where
     -- Meta-information, which is not handled elsewhere, is just added to the
     -- parsed value:
-    mgParseJSON opts fargs = fmap (fmap M1) . mgParseJSON opts fargs
+    agParseJSON opts fargs = fmap (fmap M1) . agParseJSON opts fargs
 
-instance (MFromJSON m a) => MGFromJSON m arity (K1 i a) where
+instance (AFromJSON m a) => AGFromJSON m arity (K1 i a) where
     -- Constant values are decoded using their FromJSON instance:
-    mgParseJSON _opts _ = fmap (fmap K1) . mparseJSON
+    agParseJSON _opts _ = fmap (fmap K1) . aparseJSON
 
-instance Applicative m => MGFromJSON m One Par1 where
+instance Applicative m => AGFromJSON m One Par1 where
     -- Direct occurrences of the last type parameter are decoded with the
     -- function passed in as an argument:
-    mgParseJSON _opts (MFrom1Args pj _) = fmap (fmap Par1) . pj
+    agParseJSON _opts (AFrom1Args pj _) = fmap (fmap Par1) . pj
 
-instance (Applicative m, MFromJSON1 m f) => MGFromJSON m One (Rec1 f) where
+instance (Applicative m, AFromJSON1 m f) => AGFromJSON m One (Rec1 f) where
     -- Recursive occurrences of the last type parameter are decoded using their
     -- FromJSON1 instance:
-    mgParseJSON _opts (MFrom1Args pj pjl) = fmap (fmap Rec1) . mliftParseJSON pj pjl
+    agParseJSON _opts (AFrom1Args pj pjl) = fmap (fmap Rec1) . aliftParseJSON pj pjl
 
-instance Applicative m => MGFromJSON m arity U1 where
+instance Applicative m => AGFromJSON m arity U1 where
     -- Empty constructors are expected to be encoded as an empty array:
-    mgParseJSON _opts _ v
+    agParseJSON _opts _ v
         | _isEmptyArray v = pure (pure U1)
         | otherwise      = typeMismatch "unit constructor (U1)" v
       where
@@ -319,99 +296,99 @@ instance Applicative m => MGFromJSON m arity U1 where
         _isEmptyArray (Array arr) = V.null arr
         _isEmptyArray _ = False
 
-instance ( Applicative m, MConsFromJSON m arity a
+instance ( Applicative m, AConsFromJSON m arity a
          , AllNullary (C1 c a) allNullary
-         , MParseSum m arity (C1 c a) allNullary
-         ) => MGFromJSON m arity (D1 d (C1 c a)) where
+         , AParseSum m arity (C1 c a) allNullary
+         ) => AGFromJSON m arity (D1 d (C1 c a)) where
     -- The option 'tagSingleConstructors' determines whether to wrap
     -- a single-constructor type.
-    mgParseJSON opts fargs
+    agParseJSON opts fargs
 #if MIN_VERSION_aeson(1,3,0)
         | tagSingleConstructors opts
             = fmap (fmap M1)
             . (unTagged :: Tagged allNullary (Parser (m (C1 c a p))) -> Parser (m (C1 c a p)))
-            . mparseSum opts fargs
+            . aparseSum opts fargs
 #endif
-        | otherwise = fmap (fmap (M1 . M1)) . mconsParseJSON opts fargs
+        | otherwise = fmap (fmap (M1 . M1)) . aconsParseJSON opts fargs
 
-instance (Applicative m, MConsFromJSON m arity a) => MGFromJSON m arity (C1 c a) where
+instance (Applicative m, AConsFromJSON m arity a) => AGFromJSON m arity (C1 c a) where
     -- Constructors need to be decoded differently depending on whether they're
     -- a record or not. This distinction is made by consParseJSON:
-    mgParseJSON opts fargs = fmap (fmap M1) . mconsParseJSON opts fargs
+    agParseJSON opts fargs = fmap (fmap M1) . aconsParseJSON opts fargs
 
-instance ( Applicative m, MFromProduct m arity a, MFromProduct m arity b
+instance ( Applicative m, AFromProduct m arity a, AFromProduct m arity b
          , ProductSize a, ProductSize b
-         ) => MGFromJSON m arity (a :*: b) where
+         ) => AGFromJSON m arity (a :*: b) where
     -- Products are expected to be encoded to an array. Here we check whether we
     -- got an array of the same size as the product, then parse each of the
     -- product's elements using parseProduct:
-    mgParseJSON opts fargs = withArray "product (:*:)" $ \arr ->
+    agParseJSON opts fargs = withArray "product (:*:)" $ \arr ->
       let lenArray = V.length arr
           lenProduct = (unTagged2 :: Tagged2 (a :*: b) Int -> Int)
                        productSize in
       if lenArray == lenProduct
-      then mparseProduct opts fargs arr 0 lenProduct
+      then aparseProduct opts fargs arr 0 lenProduct
       else fail $ "When expecting a product of " ++ show lenProduct ++
                   " values, encountered an Array of " ++ show lenArray ++
                   " elements instead"
 
 instance ( Applicative m
          , AllNullary (a :+: b) allNullary
-         , MParseSum m arity (a :+: b) allNullary
-         ) => MGFromJSON m arity (a :+: b) where
+         , AParseSum m arity (a :+: b) allNullary
+         ) => AGFromJSON m arity (a :+: b) where
     -- If all constructors of a sum datatype are nullary and the
     -- 'allNullaryToStringTag' option is set they are expected to be
     -- encoded as strings.  This distinction is made by 'parseSum':
-    mgParseJSON opts fargs =
+    agParseJSON opts fargs =
       (unTagged :: Tagged allNullary (Parser (m ((a :+: b) d))) ->
                                      Parser (m ((a :+: b) d)))
-                 . mparseSum opts fargs
+                 . aparseSum opts fargs
 
-instance (MFromJSON1 m f, MGFromJSON m One g) => MGFromJSON m One (f :.: g) where
+instance (AFromJSON1 m f, AGFromJSON m One g) => AGFromJSON m One (f :.: g) where
     -- If an occurrence of the last type parameter is nested inside two
     -- composed types, it is decoded by using the outermost type's FromJSON1
     -- instance to generically decode the innermost type:
-    mgParseJSON opts fargs =
-      let gpj = mgParseJSON opts fargs in
-      fmap (fmap Comp1) . mliftParseJSON gpj (mlistParser gpj)
+    agParseJSON opts fargs =
+      let gpj = agParseJSON opts fargs in
+      fmap (fmap Comp1) . aliftParseJSON gpj (alistParser gpj)
 
 --------------------------------------------------------------------------------
 
-class MParseSum m arity f allNullary where
-    mparseSum :: Options -> MFromArgs m arity a
+class AParseSum m arity f allNullary where
+    aparseSum :: Options -> AFromArgs m arity a
              -> Value -> Tagged allNullary (Parser (m (f a)))
 
-instance ( MSumFromString m f
-         , MFromPair m arity f
-         , MFromTaggedObject m arity f
-         , MFromUntaggedValue m arity f
-         ) => MParseSum m arity f 'True where
-    mparseSum opts fargs
-        | allNullaryToStringTag opts = Tagged . mparseAllNullarySum opts
-        | otherwise                  = Tagged . mparseNonAllNullarySum opts fargs
+instance ( ASumFromString m f
+         , AFromPair m arity f
+         , AFromTaggedObject m arity f
+         , AFromUntaggedValue m arity f
+         ) => AParseSum m arity f 'True where
+    aparseSum opts fargs
+        | allNullaryToStringTag opts = Tagged . aparseAllNullarySum opts
+        | otherwise                  = Tagged . aparseNonAllNullarySum opts fargs
 
-instance ( MFromPair m arity f
-         , MFromTaggedObject m arity f
-         , MFromUntaggedValue m arity f
-         ) => MParseSum m arity f 'False where
-    mparseSum opts fargs = Tagged . mparseNonAllNullarySum opts fargs
+instance ( AFromPair m arity f
+         , AFromTaggedObject m arity f
+         , AFromUntaggedValue m arity f
+         ) => AParseSum m arity f 'False where
+    aparseSum opts fargs = Tagged . aparseNonAllNullarySum opts fargs
 
 --------------------------------------------------------------------------------
 
-mparseAllNullarySum :: MSumFromString m f => Options -> Value -> Parser (m (f a))
-mparseAllNullarySum opts = withText "Text" $ \key ->
+aparseAllNullarySum :: ASumFromString m f => Options -> Value -> Parser (m (f a))
+aparseAllNullarySum opts = withText "Text" $ \key ->
                             maybe (notFound key) pure $
-                              mparseSumFromString opts key
+                              aparseSumFromString opts key
 
-class MSumFromString m f where
-    mparseSumFromString :: Options -> Text -> Maybe (m (f a))
+class ASumFromString m f where
+    aparseSumFromString :: Options -> Text -> Maybe (m (f a))
 
-instance (Functor m, MSumFromString m a, MSumFromString m b) => MSumFromString m (a :+: b) where
-    mparseSumFromString opts key = (fmap L1 <$> mparseSumFromString opts key) <|>
-                                  (fmap R1 <$> mparseSumFromString opts key)
+instance (Functor m, ASumFromString m a, ASumFromString m b) => ASumFromString m (a :+: b) where
+    aparseSumFromString opts key = (fmap L1 <$> aparseSumFromString opts key) <|>
+                                  (fmap R1 <$> aparseSumFromString opts key)
 
-instance (Applicative m, Constructor c) => MSumFromString m (C1 c U1) where
-    mparseSumFromString opts key | key == name = Just $ pure $ M1 U1
+instance (Applicative m, Constructor c) => ASumFromString m (C1 c U1) where
+    aparseSumFromString opts key | key == name = Just $ pure $ M1 U1
                                  | otherwise   = Nothing
         where
           name = pack $ constructorTagModifier opts $
@@ -419,24 +396,24 @@ instance (Applicative m, Constructor c) => MSumFromString m (C1 c U1) where
 
 --------------------------------------------------------------------------------
 
-mparseNonAllNullarySum :: ( MFromPair m arity f
-                         , MFromTaggedObject m arity f
-                         , MFromUntaggedValue m arity f
-                         ) => Options -> MFromArgs m arity c
+aparseNonAllNullarySum :: ( AFromPair m arity f
+                         , AFromTaggedObject m arity f
+                         , AFromUntaggedValue m arity f
+                         ) => Options -> AFromArgs m arity c
                            -> Value -> Parser (m (f c))
-mparseNonAllNullarySum opts fargs =
+aparseNonAllNullarySum opts fargs =
     case sumEncoding opts of
       TaggedObject{..} ->
           withObject "Object" $ \obj -> do
             tag <- obj .: pack tagFieldName
             fromMaybe (notFound tag) $
-              mparseFromTaggedObject opts fargs contentsFieldName obj tag
+              aparseFromTaggedObject opts fargs contentsFieldName obj tag
 
       ObjectWithSingleField ->
           withObject "Object" $ \obj ->
             case H.toList obj of
               [pr@(tag, _)] -> fromMaybe (notFound tag) $
-                                   mparsePair opts fargs pr
+                                   aparsePair opts fargs pr
               _ -> fail "Object doesn't have a single field"
 
       TwoElemArray ->
@@ -444,30 +421,30 @@ mparseNonAllNullarySum opts fargs =
             if V.length arr == 2
             then case V.unsafeIndex arr 0 of
                    String tag -> fromMaybe (notFound tag) $
-                                   mparsePair opts fargs (tag, V.unsafeIndex arr 1)
+                                   aparsePair opts fargs (tag, V.unsafeIndex arr 1)
                    _ -> fail "First element is not a String"
             else fail "Array doesn't have 2 elements"
 
-      UntaggedValue -> mparseUntaggedValue opts fargs
+      UntaggedValue -> aparseUntaggedValue opts fargs
 
 --------------------------------------------------------------------------------
 
-class MFromTaggedObject m arity f where
-    mparseFromTaggedObject :: Options -> MFromArgs m arity a
+class AFromTaggedObject m arity f where
+    aparseFromTaggedObject :: Options -> AFromArgs m arity a
                           -> String -> Object
                           -> Text -> Maybe (Parser (m (f a)))
 
-instance ( Functor m, MFromTaggedObject m arity a, MFromTaggedObject m arity b) =>
-    MFromTaggedObject m arity (a :+: b) where
-        mparseFromTaggedObject opts fargs contentsFieldName obj tag =
-            (fmap (fmap L1) <$> mparseFromTaggedObject opts fargs contentsFieldName obj tag) <|>
-            (fmap (fmap R1) <$> mparseFromTaggedObject opts fargs contentsFieldName obj tag)
+instance ( Functor m, AFromTaggedObject m arity a, AFromTaggedObject m arity b) =>
+    AFromTaggedObject m arity (a :+: b) where
+        aparseFromTaggedObject opts fargs contentsFieldName obj tag =
+            (fmap (fmap L1) <$> aparseFromTaggedObject opts fargs contentsFieldName obj tag) <|>
+            (fmap (fmap R1) <$> aparseFromTaggedObject opts fargs contentsFieldName obj tag)
 
-instance ( Functor m, MFromTaggedObject' m arity f
+instance ( Functor m, AFromTaggedObject' m arity f
          , Constructor c
-         ) => MFromTaggedObject m arity (C1 c f) where
-    mparseFromTaggedObject opts fargs contentsFieldName obj tag
-        | tag == name = Just $ (fmap M1) <$> mparseFromTaggedObject'
+         ) => AFromTaggedObject m arity (C1 c f) where
+    aparseFromTaggedObject opts fargs contentsFieldName obj tag
+        | tag == name = Just $ (fmap M1) <$> aparseFromTaggedObject'
                                         opts fargs contentsFieldName obj
         | otherwise = Nothing
         where
@@ -476,143 +453,143 @@ instance ( Functor m, MFromTaggedObject' m arity f
 
 --------------------------------------------------------------------------------
 
-class MFromTaggedObject' m arity f where
-    mparseFromTaggedObject' :: Options -> MFromArgs m arity a -> String
+class AFromTaggedObject' m arity f where
+    aparseFromTaggedObject' :: Options -> AFromArgs m arity a -> String
                            -> Object -> Parser (m (f a))
 
-class MFromTaggedObject'' m arity f isRecord where
-    mparseFromTaggedObject'' :: Options -> MFromArgs m arity a -> String
+class AFromTaggedObject'' m arity f isRecord where
+    aparseFromTaggedObject'' :: Options -> AFromArgs m arity a -> String
                             -> Object -> Tagged isRecord (Parser (m (f a)))
 
 instance ( IsRecord f isRecord
-         , MFromTaggedObject'' m arity f isRecord
-         ) => MFromTaggedObject' m arity f where
-    mparseFromTaggedObject' opts fargs contentsFieldName =
+         , AFromTaggedObject'' m arity f isRecord
+         ) => AFromTaggedObject' m arity f where
+    aparseFromTaggedObject' opts fargs contentsFieldName =
         (unTagged :: Tagged isRecord (Parser (m (f a))) -> Parser (m (f a))) .
-        mparseFromTaggedObject'' opts fargs contentsFieldName
+        aparseFromTaggedObject'' opts fargs contentsFieldName
 
-instance (MFromRecord m arity f) => MFromTaggedObject'' m arity f 'True where
-    mparseFromTaggedObject'' opts fargs _ =
-      Tagged . mparseRecord opts fargs
+instance (AFromRecord m arity f) => AFromTaggedObject'' m arity f 'True where
+    aparseFromTaggedObject'' opts fargs _ =
+      Tagged . aparseRecord opts fargs
 
-instance (MGFromJSON m arity f) => MFromTaggedObject'' m arity f 'False where
-    mparseFromTaggedObject'' opts fargs contentsFieldName = Tagged .
-      (mgParseJSON opts fargs <=< (.: pack contentsFieldName))
+instance (AGFromJSON m arity f) => AFromTaggedObject'' m arity f 'False where
+    aparseFromTaggedObject'' opts fargs contentsFieldName = Tagged .
+      (agParseJSON opts fargs <=< (.: pack contentsFieldName))
 
-instance {-# OVERLAPPING #-} Applicative m => MFromTaggedObject'' m arity U1 'False where
-    mparseFromTaggedObject'' _ _ _ _ = Tagged (pure (pure U1))
+instance {-# OVERLAPPING #-} Applicative m => AFromTaggedObject'' m arity U1 'False where
+    aparseFromTaggedObject'' _ _ _ _ = Tagged (pure (pure U1))
 
 --------------------------------------------------------------------------------
 
-class MConsFromJSON m arity f where
-    mconsParseJSON  :: Options -> MFromArgs m arity a
+class AConsFromJSON m arity f where
+    aconsParseJSON  :: Options -> AFromArgs m arity a
                    -> Value -> Parser (m (f a))
 
-class MConsFromJSON' m arity f isRecord where
-    mconsParseJSON' :: Options -> MFromArgs m arity a
+class AConsFromJSON' m arity f isRecord where
+    aconsParseJSON' :: Options -> AFromArgs m arity a
                    -> Value -> Tagged isRecord (Parser (m (f a)))
 
 instance ( IsRecord f isRecord
-         , MConsFromJSON' m arity f isRecord
-         ) => MConsFromJSON m arity f where
-    mconsParseJSON opts fargs =
+         , AConsFromJSON' m arity f isRecord
+         ) => AConsFromJSON m arity f where
+    aconsParseJSON opts fargs =
       (unTagged :: Tagged isRecord (Parser (m (f a))) -> Parser (m (f a)))
-        . mconsParseJSON' opts fargs
+        . aconsParseJSON' opts fargs
 
 instance {-# OVERLAPPING #-}
-         ( MGFromJSON m arity a, MFromRecord m arity (S1 s a)
-         ) => MConsFromJSON' m arity (S1 s a) 'True where
-    mconsParseJSON' opts fargs
-      | unwrapUnaryRecords opts = Tagged . mgParseJSON opts fargs
-      | otherwise = Tagged . withObject "unary record" (mparseRecord opts fargs)
+         ( AGFromJSON m arity a, AFromRecord m arity (S1 s a)
+         ) => AConsFromJSON' m arity (S1 s a) 'True where
+    aconsParseJSON' opts fargs
+      | unwrapUnaryRecords opts = Tagged . agParseJSON opts fargs
+      | otherwise = Tagged . withObject "unary record" (aparseRecord opts fargs)
 
-instance MFromRecord m arity f => MConsFromJSON' m arity f 'True where
-    mconsParseJSON' opts fargs =
-      Tagged . withObject "record (:*:)" (mparseRecord opts fargs)
+instance AFromRecord m arity f => AConsFromJSON' m arity f 'True where
+    aconsParseJSON' opts fargs =
+      Tagged . withObject "record (:*:)" (aparseRecord opts fargs)
 
-instance MGFromJSON m arity f => MConsFromJSON' m arity f 'False where
-    mconsParseJSON' opts fargs = Tagged . mgParseJSON opts fargs
+instance AGFromJSON m arity f => AConsFromJSON' m arity f 'False where
+    aconsParseJSON' opts fargs = Tagged . agParseJSON opts fargs
 
 --------------------------------------------------------------------------------
 
-class MFromRecord m arity f where
-    mparseRecord :: Options -> MFromArgs m arity a
+class AFromRecord m arity f where
+    aparseRecord :: Options -> AFromArgs m arity a
                 -> Object -> Parser (m (f a))
 
 instance
     ( Applicative m
-    , MFromRecord m arity a
-    , MFromRecord m arity b
-    ) => MFromRecord m arity (a :*: b) where
-    mparseRecord opts fargs obj = getCompose $
-      (:*:) <$> Compose (mparseRecord opts fargs obj)
-            <*> Compose (mparseRecord opts fargs obj)
+    , AFromRecord m arity a
+    , AFromRecord m arity b
+    ) => AFromRecord m arity (a :*: b) where
+    aparseRecord opts fargs obj = getCompose $
+      (:*:) <$> Compose (aparseRecord opts fargs obj)
+            <*> Compose (aparseRecord opts fargs obj)
 
-instance {-# OVERLAPPABLE #-} (Selector s, MGFromJSON m arity a) =>
-  MFromRecord m arity (S1 s a) where
-    mparseRecord opts fargs =
-      (<?> Key label) . mgParseJSON opts fargs <=< (.: label)
+instance {-# OVERLAPPABLE #-} (Selector s, AGFromJSON m arity a) =>
+  AFromRecord m arity (S1 s a) where
+    aparseRecord opts fargs =
+      (<?> Key label) . agParseJSON opts fargs <=< (.: label)
         where
           label = pack . fieldLabelModifier opts $ selName (undefined :: t s a p)
 
-instance {-# INCOHERENT #-} (Selector s, MFromJSON m a) =>
-  MFromRecord m arity (S1 s (K1 i (Maybe a))) where
-    mparseRecord opts _ obj = fmap (M1 . K1) <$> obj `mparseFieldMaybe` pack label
+instance {-# INCOHERENT #-} (Selector s, AFromJSON m a) =>
+  AFromRecord m arity (S1 s (K1 i (Maybe a))) where
+    aparseRecord opts _ obj = fmap (M1 . K1) <$> obj `aparseFieldMaybe` pack label
         where
           label = fieldLabelModifier opts $
                     selName (undefined :: t s (K1 i (Maybe a)) p)
 
 -- Parse an Option like a Maybe.
-instance {-# INCOHERENT #-} (Selector s, MFromJSON m a) =>
-  MFromRecord m arity (S1 s (K1 i (Semigroup.Option a))) where
-    mparseRecord opts fargs obj = fmap wrap <$> mparseRecord opts fargs obj
+instance {-# INCOHERENT #-} (Selector s, AFromJSON m a) =>
+  AFromRecord m arity (S1 s (K1 i (Semigroup.Option a))) where
+    aparseRecord opts fargs obj = fmap wrap <$> aparseRecord opts fargs obj
       where
         wrap :: S1 s (K1 i (Maybe a)) p -> S1 s (K1 i (Semigroup.Option a)) p
         wrap (M1 (K1 a)) = M1 (K1 (Semigroup.Option a))
 
 --------------------------------------------------------------------------------
 
-class MFromProduct m arity f where
-    mparseProduct :: Options -> MFromArgs m arity a
+class AFromProduct m arity f where
+    aparseProduct :: Options -> AFromArgs m arity a
                  -> Array -> Int -> Int
                  -> Parser (m (f a))
 
 instance ( Applicative m
-         , MFromProduct m arity a
-         , MFromProduct m arity b
-         ) => MFromProduct m arity (a :*: b) where
-    mparseProduct opts fargs arr ix len = getCompose $
-        (:*:) <$> Compose (mparseProduct opts fargs arr ix  lenL)
-              <*> Compose (mparseProduct opts fargs arr ixR lenR)
+         , AFromProduct m arity a
+         , AFromProduct m arity b
+         ) => AFromProduct m arity (a :*: b) where
+    aparseProduct opts fargs arr ix len = getCompose $
+        (:*:) <$> Compose (aparseProduct opts fargs arr ix  lenL)
+              <*> Compose (aparseProduct opts fargs arr ixR lenR)
         where
           lenL = len `unsafeShiftR` 1
           ixR  = ix + lenL
           lenR = len - lenL
 
-instance (MGFromJSON m arity a) => MFromProduct m arity (S1 s a) where
-    mparseProduct opts fargs arr ix _ =
-      mgParseJSON opts fargs $ V.unsafeIndex arr ix
+instance (AGFromJSON m arity a) => AFromProduct m arity (S1 s a) where
+    aparseProduct opts fargs arr ix _ =
+      agParseJSON opts fargs $ V.unsafeIndex arr ix
 
 --------------------------------------------------------------------------------
 
-class MFromPair m arity f where
-    mparsePair :: Options -> MFromArgs m arity a
+class AFromPair m arity f where
+    aparsePair :: Options -> AFromArgs m arity a
               -> Pair -> Maybe (Parser (m (f a)))
 
 instance
     ( Functor m
-    , MFromPair m arity a
-    , MFromPair m arity b
-    ) => MFromPair m arity (a :+: b) where
-    mparsePair opts fargs pr = (fmap (fmap L1) <$> mparsePair opts fargs pr) <|>
-                                (fmap (fmap R1) <$> mparsePair opts fargs pr)
+    , AFromPair m arity a
+    , AFromPair m arity b
+    ) => AFromPair m arity (a :+: b) where
+    aparsePair opts fargs pr = (fmap (fmap L1) <$> aparsePair opts fargs pr) <|>
+                                (fmap (fmap R1) <$> aparsePair opts fargs pr)
 
 instance ( Constructor c
-         , MGFromJSON m arity a
-         , MConsFromJSON m arity a
-         ) => MFromPair m arity (C1 c a) where
-    mparsePair opts fargs (tag, value)
-        | tag == tag' = Just $ mgParseJSON opts fargs value
+         , AGFromJSON m arity a
+         , AConsFromJSON m arity a
+         ) => AFromPair m arity (C1 c a) where
+    aparsePair opts fargs (tag, value)
+        | tag == tag' = Just $ agParseJSON opts fargs value
         | otherwise   = Nothing
         where
           tag' = pack $ constructorTagModifier opts $
@@ -620,37 +597,37 @@ instance ( Constructor c
 
 --------------------------------------------------------------------------------
 
-class MFromUntaggedValue m arity f where
-    mparseUntaggedValue :: Options -> MFromArgs m arity a
+class AFromUntaggedValue m arity f where
+    aparseUntaggedValue :: Options -> AFromArgs m arity a
                        -> Value -> Parser (m (f a))
 
 instance
     ( Functor m
-    , MFromUntaggedValue m arity a
-    , MFromUntaggedValue m arity b
-    ) => MFromUntaggedValue m arity (a :+: b)
+    , AFromUntaggedValue m arity a
+    , AFromUntaggedValue m arity b
+    ) => AFromUntaggedValue m arity (a :+: b)
   where
-    mparseUntaggedValue opts fargs value =
-        fmap L1 <$> mparseUntaggedValue opts fargs value <|>
-        fmap R1 <$> mparseUntaggedValue opts fargs value
+    aparseUntaggedValue opts fargs value =
+        fmap L1 <$> aparseUntaggedValue opts fargs value <|>
+        fmap R1 <$> aparseUntaggedValue opts fargs value
 
 instance {-# OVERLAPPABLE #-}
-    ( MGFromJSON m arity a
-    , MConsFromJSON m arity a
-    ) => MFromUntaggedValue m arity (C1 c a)
+    ( AGFromJSON m arity a
+    , AConsFromJSON m arity a
+    ) => AFromUntaggedValue m arity (C1 c a)
   where
-    mparseUntaggedValue = mgParseJSON
+    aparseUntaggedValue = agParseJSON
 
 instance {-# OVERLAPPING #-}
     ( Applicative m, Constructor c )
-    => MFromUntaggedValue m arity (C1 c U1)
+    => AFromUntaggedValue m arity (C1 c U1)
   where
-    mparseUntaggedValue opts _ (String s)
+    aparseUntaggedValue opts _ (String s)
         | s == pack (constructorTagModifier opts (conName (undefined :: t c U1 p))) =
             pure $ pure $ M1 U1
         | otherwise =
             fail $ "Invalid tag: " ++ unpack s
-    mparseUntaggedValue _ _ v = typeMismatch (conName (undefined :: t c U1 p)) v
+    aparseUntaggedValue _ _ v = typeMismatch (conName (undefined :: t c U1 p)) v
 
 --------------------------------------------------------------------------------
 
@@ -659,1147 +636,1059 @@ notFound key = fail $ "The key \"" ++ unpack key ++ "\" was not found"
 {-# INLINE notFound #-}
 
 
--- -------------------------------------------------------------------------------
--- -- Instances
--- -------------------------------------------------------------------------------
-
--- -------------------------------------------------------------------------------
--- -- base
--- -------------------------------------------------------------------------------
-
-
--- instance MFromJSON2 m Const where
---     liftParseJSON2 p _ _ _ = fmap Const . p
---     {-# INLINE liftParseJSON2 #-}
-
--- instance MFromJSON m a => MFromJSON1 m (Const a) where
---     liftParseJSON _ _ = fmap Const . parseJSON
---     {-# INLINE liftParseJSON #-}
-
--- instance MFromJSON m a => MFromJSON m (Const a b) where
---     {-# INLINE parseJSON #-}
---     parseJSON = fmap Const . parseJSON
-
-
-instance Applicative m => MFromJSON1 m Maybe where
-    mliftParseJSON _ _ Null = pure (pure Nothing)
-    mliftParseJSON p _ a    = fmap Just <$> p a
-    {-# INLINE mliftParseJSON #-}
-
-instance (MFromJSON m  a) => MFromJSON m (Maybe a) where
-    mparseJSON = mparseJSON1
-    {-# INLINE mparseJSON #-}
-
-
-
--- instance MFromJSON2 m Either where
---     liftParseJSON2 pA _ pB _ (Object (H.toList -> [(key, value)]))
---         | key == left  = Left  <$> pA value <?> Key left
---         | key == right = Right <$> pB value <?> Key right
---       where
---         left, right :: Text
---         left  = "Left"
---         right = "Right"
-
---     liftParseJSON2 _ _ _ _ _ = fail $
---         "expected an object with a single property " ++
---         "where the property key should be either " ++
---         "\"Left\" or \"Right\""
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a) => MFromJSON1 m (Either a) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b) => MFromJSON m (Either a b) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
--- instance MFromJSON m Void where
---     parseJSON _ = fail "Cannot parse Void"
---     {-# INLINE parseJSON #-}
-
--- instance MFromJSON m Bool where
---     parseJSON = withBool "Bool" pure
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Bool where
---     fromJSONKey = FromJSONKeyTextParser $ \t -> case t of
---         "true"  -> pure True
---         "false" -> pure False
---         _       -> fail $ "Cannot parse key into Bool: " ++ T.unpack t
-
--- instance MFromJSON m Ordering where
---   parseJSON = withText "Ordering" $ \s ->
---     case s of
---       "LT" -> return LT
---       "EQ" -> return EQ
---       "GT" -> return GT
---       _ -> fail "Parsing Ordering value failed: expected \"LT\", \"EQ\", or \"GT\""
-
--- instance MFromJSON m () where
---     parseJSON = withArray "()" $ \v ->
---                   if V.null v
---                     then pure ()
---                     else fail "Expected an empty array"
---     {-# INLINE parseJSON #-}
-
--- instance MFromJSON m Char where
---     parseJSON = withText "Char" $ \t ->
---                   if T.compareLength t 1 == EQ
---                     then pure $ T.head t
---                     else fail "Expected a string of length 1"
---     {-# INLINE parseJSON #-}
-
---     parseJSONList = withText "String" $ pure . T.unpack
---     {-# INLINE parseJSONList #-}
-
--- instance MFromJSON m Double where
---     parseJSON = parseRealFloat "Double"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Double where
---     fromJSONKey = FromJSONKeyTextParser $ \t -> case t of
---         "NaN"       -> pure (0/0)
---         "Infinity"  -> pure (1/0)
---         "-Infinity" -> pure (negate 1/0)
---         _           -> Scientific.toRealFloat <$> parseScientificText t
-
--- instance MFromJSON m Float where
---     parseJSON = parseRealFloat "Float"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Float where
---     fromJSONKey = FromJSONKeyTextParser $ \t -> case t of
---         "NaN"       -> pure (0/0)
---         "Infinity"  -> pure (1/0)
---         "-Infinity" -> pure (negate 1/0)
---         _           -> Scientific.toRealFloat <$> parseScientificText t
-
--- instance (MFromJSON m  a, Integral a) => MFromJSON m (Ratio a) where
---     parseJSON = withObject "Rational" $ \obj -> do
---         numerator <- obj .: "numerator"
---         denominator <- obj .: "denominator"
---         if denominator == 0
---         then fail "Ratio denominator was 0"
---         else pure $ numerator % denominator
---     {-# INLINE parseJSON #-}
-
--- -- | This instance includes a bounds check to prevent maliciously
--- -- large inputs to fill up the memory of the target system. You can
--- -- newtype 'Scientific' and provide your own instance using
--- -- 'withScientific' if you want to allow larger inputs.
--- instance HasResolution a => MFromJSON m (Fixed a) where
---     parseJSON = withBoundedScientific "Fixed" $ pure . realToFrac
---     {-# INLINE parseJSON #-}
-
--- instance MFromJSON m Int where
---     parseJSON = parseBoundedIntegral "Int"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Int where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Int"
-
--- -- | This instance includes a bounds check to prevent maliciously
--- -- large inputs to fill up the memory of the target system. You can
--- -- newtype 'Scientific' and provide your own instance using
--- -- 'withScientific' if you want to allow larger inputs.
--- instance MFromJSON m Integer where
---     parseJSON = parseIntegral "Integer"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Integer where
---     fromJSONKey = FromJSONKeyTextParser $ parseIntegralText "Integer"
-
--- instance MFromJSON m Natural where
---     parseJSON value = do
---         integer :: Integer <- parseIntegral "Natural" value
---         if integer < 0 then
---             fail $ "expected Natural, encountered negative number " <> show integer
---         else
---             pure $ fromIntegral integer
-
--- instance FromJSONKey Natural where
---     fromJSONKey = FromJSONKeyTextParser $ \text -> do
---         integer :: Integer <- parseIntegralText "Natural" text
---         if integer < 0 then
---             fail $ "expected Natural, encountered negative number " <> show integer
---         else
---             pure $ fromIntegral integer
-
--- instance MFromJSON m Int8 where
---     parseJSON = parseBoundedIntegral "Int8"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Int8 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Int8"
-
--- instance MFromJSON m Int16 where
---     parseJSON = parseBoundedIntegral "Int16"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Int16 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Int16"
-
--- instance MFromJSON m Int32 where
---     parseJSON = parseBoundedIntegral "Int32"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Int32 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Int32"
-
--- instance MFromJSON m Int64 where
---     parseJSON = parseBoundedIntegral "Int64"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Int64 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Int64"
-
--- instance MFromJSON m Word where
---     parseJSON = parseBoundedIntegral "Word"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Word where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Word"
-
--- instance MFromJSON m Word8 where
---     parseJSON = parseBoundedIntegral "Word8"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Word8 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Word8"
-
--- instance MFromJSON m Word16 where
---     parseJSON = parseBoundedIntegral "Word16"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Word16 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Word16"
-
--- instance MFromJSON m Word32 where
---     parseJSON = parseBoundedIntegral "Word32"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Word32 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Word32"
-
--- instance MFromJSON m Word64 where
---     parseJSON = parseBoundedIntegral "Word64"
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Word64 where
---     fromJSONKey = FromJSONKeyTextParser $ parseBoundedIntegralText "Word64"
-
--- instance MFromJSON m CTime where
---     parseJSON = fmap CTime . parseJSON
---     {-# INLINE parseJSON #-}
-
--- instance MFromJSON m Text where
---     parseJSON = withText "Text" pure
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Text where
---     fromJSONKey = fromJSONKeyCoerce
-
-
--- instance MFromJSON m LT.Text where
---     parseJSON = withText "Lazy Text" $ pure . LT.fromStrict
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey LT.Text where
---     fromJSONKey = FromJSONKeyText LT.fromStrict
-
-
--- instance MFromJSON m Version where
---     parseJSON = withText "Version" parseVersionText
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey Version where
---     fromJSONKey = FromJSONKeyTextParser parseVersionText
-
--- parseVersionText :: Text -> Parser Version
--- parseVersionText = go . readP_to_S parseVersion . unpack
---   where
---     go [(v,[])] = return v
---     go (_ : xs) = go xs
---     go _        = fail "could not parse Version"
-
--- -------------------------------------------------------------------------------
--- -- semigroups NonEmpty
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON1 m NonEmpty where
---     liftParseJSON p _ = withArray "NonEmpty a" $
---         (>>= ne) . Tr.sequence . zipWith (parseIndexedJSON p) [0..] . V.toList
---       where
---         ne []     = fail "Expected a NonEmpty but got an empty list"
---         ne (x:xs) = pure (x :| xs)
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a) => MFromJSON m (NonEmpty a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- scientific
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON m Scientific where
---     parseJSON = withScientific "Scientific" pure
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- DList
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON1 m DList.DList where
---     liftParseJSON p _ = withArray "DList a" $
---       fmap DList.fromList .
---       Tr.sequence . zipWith (parseIndexedJSON p) [0..] . V.toList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a) => MFromJSON m (DList.DList a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- tranformers - Functors
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON1 m Identity where
---     liftParseJSON p _ a = Identity <$> p a
---     {-# INLINE liftParseJSON #-}
-
---     liftParseJSONList _ p a = fmap Identity <$> p a
---     {-# INLINE liftParseJSONList #-}
-
--- instance (MFromJSON m  a) => MFromJSON m (Identity a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
---     parseJSONList = liftParseJSONList parseJSON parseJSONList
---     {-# INLINE parseJSONList #-}
-
--- instance (MFromJSON m Key a) => FromJSONKey (Identity a) where
---     fromJSONKey = coerceFromJSONKeyFunction (fromJSONKey :: FromJSONKeyFunction a)
---     fromJSONKeyList = coerceFromJSONKeyFunction (fromJSONKeyList :: FromJSONKeyFunction [a])
-
-
--- instance (MFromJSON1 m  f, MFromJSON1 m g) => MFromJSON1 m (Compose f g) where
---     liftParseJSON p pl a = Compose <$> liftParseJSON g gl a
---       where
---         g  = liftParseJSON p pl
---         gl = liftParseJSONList p pl
---     {-# INLINE liftParseJSON #-}
-
---     liftParseJSONList p pl a = map Compose <$> liftParseJSONList g gl a
---       where
---         g  = liftParseJSON p pl
---         gl = liftParseJSONList p pl
---     {-# INLINE liftParseJSONList #-}
-
--- instance (MFromJSON1 m  f, MFromJSON1 m g, MFromJSON m a) => MFromJSON m (Compose f g a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
---     parseJSONList = liftParseJSONList parseJSON parseJSONList
---     {-# INLINE parseJSONList #-}
-
-
--- instance (MFromJSON1 m  f, MFromJSON1 m g) => MFromJSON1 m (Product f g) where
---     liftParseJSON p pl a = uncurry Pair <$> liftParseJSON2 px pxl py pyl a
---       where
---         px  = liftParseJSON p pl
---         pxl = liftParseJSONList p pl
---         py  = liftParseJSON p pl
---         pyl = liftParseJSONList p pl
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON1 m  f, MFromJSON1 m g, MFromJSON m a) => MFromJSON m (Product f g a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON1 m  f, MFromJSON1 m g) => MFromJSON1 m (Sum f g) where
---     liftParseJSON p pl (Object (H.toList -> [(key, value)]))
---         | key == inl = InL <$> liftParseJSON p pl value <?> Key inl
---         | key == inr = InR <$> liftParseJSON p pl value <?> Key inl
---       where
---         inl, inr :: Text
---         inl = "InL"
---         inr = "InR"
-
---     liftParseJSON _ _ _ = fail $
---         "expected an object with a single property " ++
---         "where the property key should be either " ++
---         "\"InL\" or \"InR\""
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON1 m  f, MFromJSON1 m g, MFromJSON m a) => MFromJSON m (Sum f g a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- containers
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON1 m Seq.Seq where
---     liftParseJSON p _ = withArray "Seq a" $
---       fmap Seq.fromList .
---       Tr.sequence . zipWith (parseIndexedJSON p) [0..] . V.toList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a) => MFromJSON m (Seq.Seq a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
-
--- instance (Ord a, MFromJSON m a) => MFromJSON m (Set.Set a) where
---     parseJSON = fmap Set.fromList . parseJSON
---     {-# INLINE parseJSON #-}
-
-
--- instance MFromJSON m IntSet.IntSet where
---     parseJSON = fmap IntSet.fromList . parseJSON
---     {-# INLINE parseJSON #-}
-
-
--- instance MFromJSON1 m IntMap.IntMap where
---     liftParseJSON p pl = fmap IntMap.fromList . liftParseJSON p' pl'
---       where
---         p'  = liftParseJSON2     parseJSON parseJSONList p pl
---         pl' = liftParseJSONList2 parseJSON parseJSONList p pl
---     {-# INLINE liftParseJSON #-}
-
--- instance MFromJSON m a => MFromJSON m (IntMap.IntMap a) where
---     parseJSON = fmap IntMap.fromList . parseJSON
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m Key k, Ord k) => MFromJSON1 m (M.Map k) where
---     liftParseJSON p _ = case fromJSONKey of
---         FromJSONKeyCoerce _-> withObject "Map k v" $
---             fmap (H.foldrWithKey (M.insert . unsafeCoerce) M.empty) . H.traverseWithKey (\k v -> p v <?> Key k)
---         FromJSONKeyText f -> withObject "Map k v" $
---             fmap (H.foldrWithKey (M.insert . f) M.empty) . H.traverseWithKey (\k v -> p v <?> Key k)
---         FromJSONKeyTextParser f -> withObject "Map k v" $
---             H.foldrWithKey (\k v m -> M.insert <$> f k <?> Key k <*> p v <?> Key k <*> m) (pure M.empty)
---         FromJSONKeyValue f -> withArray "Map k v" $ \arr ->
---             fmap M.fromList . Tr.sequence .
---                 zipWith (parseIndexedJSONPair f p) [0..] . V.toList $ arr
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m Key k, Ord k, MFromJSON m v) => MFromJSON m (M.Map k v) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
-
--- instance MFromJSON1 m Tree.Tree where
---     liftParseJSON p pl = go
---       where
---         go v = uncurry Tree.Node <$> liftParseJSON2 p pl p' pl' v
-
---         p' = liftParseJSON go (listParser go)
---         pl'= liftParseJSONList go (listParser go)
-
--- instance (MFromJSON m  v) => MFromJSON m (Tree.Tree v) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- uuid
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON m UUID.UUID where
---     parseJSON = withText "UUID" $
---         maybe (fail "Invalid UUID") pure . UUID.fromText
-
--- instance FromJSONKey UUID.UUID where
---     fromJSONKey = FromJSONKeyTextParser $
---         maybe (fail "Invalid UUID") pure . UUID.fromText
-
--- -------------------------------------------------------------------------------
--- -- vector
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON1 m Vector where
---     liftParseJSON p _ = withArray "Vector a" $
---         V.mapM (uncurry $ parseIndexedJSON p) . V.indexed
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a) => MFromJSON m (Vector a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
-
--- vectorParseJSON :: (MFromJSON m  a, VG.Vector w a) => String -> Value -> Parser (w a)
--- vectorParseJSON s = withArray s $ fmap V.convert . V.mapM (uncurry $ parseIndexedJSON parseJSON) . V.indexed
--- {-# INLINE vectorParseJSON #-}
-
--- instance (Storable a, MFromJSON m a) => MFromJSON m (VS.Vector a) where
---     parseJSON = vectorParseJSON "Data.Vector.Storable.Vector a"
-
--- instance (VP.Prim a, MFromJSON m a) => MFromJSON m (VP.Vector a) where
---     parseJSON = vectorParseJSON "Data.Vector.Primitive.Vector a"
---     {-# INLINE parseJSON #-}
-
--- instance (VG.Vector VU.Vector a, MFromJSON m a) => MFromJSON m (VU.Vector a) where
---     parseJSON = vectorParseJSON "Data.Vector.Unboxed.Vector a"
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- unordered-containers
--- -------------------------------------------------------------------------------
-
--- instance (Eq a, Hashable a, MFromJSON m a) => MFromJSON m (HashSet.HashSet a) where
---     parseJSON = fmap HashSet.fromList . parseJSON
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m Key k, Eq k, Hashable k) => MFromJSON1 m (H.HashMap k) where
---     liftParseJSON p _ = case fromJSONKey of
---         FromJSONKeyCoerce _ -> withObject "HashMap ~Text v" $
---             uc . H.traverseWithKey (\k v -> p v <?> Key k)
---         FromJSONKeyText f -> withObject "HashMap k v" $
---             fmap (mapKey f) . H.traverseWithKey (\k v -> p v <?> Key k)
---         FromJSONKeyTextParser f -> withObject "HashMap k v" $
---             H.foldrWithKey (\k v m -> H.insert <$> f k <?> Key k <*> p v <?> Key k <*> m) (pure H.empty)
---         FromJSONKeyValue f -> withArray "Map k v" $ \arr ->
---             fmap H.fromList . Tr.sequence .
---                 zipWith (parseIndexedJSONPair f p) [0..] . V.toList $ arr
---       where
---         uc :: Parser (H.HashMap Text v) -> Parser (H.HashMap k v)
---         uc = unsafeCoerce
-
--- instance (MFromJSON m  v, FromJSONKey k, Eq k, Hashable k) => MFromJSON m (H.HashMap k v) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- aeson
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON m Value where
---     parseJSON = pure
---     {-# INLINE parseJSON #-}
-
--- instance MFromJSON m DotNetTime where
---     parseJSON = withText "DotNetTime" $ \t ->
---         let (s,m) = T.splitAt (T.length t - 5) t
---             t'    = T.concat [s,".",m]
---         in case parseTime defaultTimeLocale "/Date(%s%Q)/" (unpack t') of
---              Just d -> pure (DotNetTime d)
---              _      -> fail "could not parse .NET time"
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- primitive
--- -------------------------------------------------------------------------------
-
--- #if MIN_VERSION_base(4,7,0)
--- instance MFromJSON m a => MFromJSON m (PM.Array a) where
---   -- note: we could do better than this if vector exposed the data
---   -- constructor in Data.Vector.
---   parseJSON = fmap Exts.fromList . parseJSON
-
--- instance MFromJSON m a => MFromJSON m (PM.SmallArray a) where
---   parseJSON = fmap Exts.fromList . parseJSON
-
--- #if MIN_VERSION_primitive(0,6,4)
--- instance (PM.Prim a,FromJSON a) => MFromJSON m (PM.PrimArray a) where
---   parseJSON = fmap Exts.fromList . parseJSON
-
--- instance (PM.PrimUnlifted a,FromJSON a) => MFromJSON m (PM.UnliftedArray a) where
---   parseJSON = fmap Exts.fromList . parseJSON
--- #endif
--- #endif
-
--- -------------------------------------------------------------------------------
--- -- time
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON m Day where
---     parseJSON = withText "Day" (Time.run Time.day)
-
--- instance FromJSONKey Day where
---     fromJSONKey = FromJSONKeyTextParser (Time.run Time.day)
-
-
--- instance MFromJSON m TimeOfDay where
---     parseJSON = withText "TimeOfDay" (Time.run Time.timeOfDay)
-
--- instance FromJSONKey TimeOfDay where
---     fromJSONKey = FromJSONKeyTextParser (Time.run Time.timeOfDay)
-
-
--- instance MFromJSON m LocalTime where
---     parseJSON = withText "LocalTime" (Time.run Time.localTime)
-
--- instance FromJSONKey LocalTime where
---     fromJSONKey = FromJSONKeyTextParser (Time.run Time.localTime)
-
-
--- -- | Supported string formats:
--- --
--- -- @YYYY-MM-DD HH:MM Z@
--- -- @YYYY-MM-DD HH:MM:SS Z@
--- -- @YYYY-MM-DD HH:MM:SS.SSS Z@
--- --
--- -- The first space may instead be a @T@, and the second space is
--- -- optional.  The @Z@ represents UTC.  The @Z@ may be replaced with a
--- -- time zone offset of the form @+0000@ or @-08:00@, where the first
--- -- two digits are hours, the @:@ is optional and the second two digits
--- -- (also optional) are minutes.
--- instance MFromJSON m ZonedTime where
---     parseJSON = withText "ZonedTime" (Time.run Time.zonedTime)
-
--- instance FromJSONKey ZonedTime where
---     fromJSONKey = FromJSONKeyTextParser (Time.run Time.zonedTime)
-
-
--- instance MFromJSON m UTCTime where
---     parseJSON = withText "UTCTime" (Time.run Time.utcTime)
+-------------------------------------------------------------------------------
+-- Instances
+-------------------------------------------------------------------------------
 
--- instance FromJSONKey UTCTime where
---     fromJSONKey = FromJSONKeyTextParser (Time.run Time.utcTime)
+-------------------------------------------------------------------------------
+-- base
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON2 m Const where
+    aliftParseJSON2 p _ _ _ = fmap (fmap Const) . p
+    {-# INLINE aliftParseJSON2 #-}
 
+instance AFromJSON m a => AFromJSON1 m (Const a) where
+    aliftParseJSON _ _ = fmap (fmap Const) . aparseJSON
+    {-# INLINE aliftParseJSON #-}
 
--- -- | This instance includes a bounds check to prevent maliciously
--- -- large inputs to fill up the memory of the target system. You can
--- -- newtype 'Scientific' and provide your own instance using
--- -- 'withScientific' if you want to allow larger inputs.
--- instance MFromJSON m NominalDiffTime where
---     parseJSON = withBoundedScientific "NominalDiffTime" $ pure . realToFrac
---     {-# INLINE parseJSON #-}
+instance AFromJSON m a => AFromJSON m (Const a b) where
+    {-# INLINE aparseJSON #-}
+    aparseJSON = fmap (fmap Const) . aparseJSON
 
 
--- -- | This instance includes a bounds check to prevent maliciously
--- -- large inputs to fill up the memory of the target system. You can
--- -- newtype 'Scientific' and provide your own instance using
--- -- 'withScientific' if you want to allow larger inputs.
--- instance MFromJSON m DiffTime where
---     parseJSON = withBoundedScientific "DiffTime" $ pure . realToFrac
---     {-# INLINE parseJSON #-}
+instance Applicative m => AFromJSON1 m Maybe where
+    aliftParseJSON _ _ Null = pure (pure Nothing)
+    aliftParseJSON p _ a    = fmap Just <$> p a
+    {-# INLINE aliftParseJSON #-}
 
--- -------------------------------------------------------------------------------
--- -- base Monoid/Semigroup
--- -------------------------------------------------------------------------------
+instance (AFromJSON m a) => AFromJSON m (Maybe a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
 
--- instance MFromJSON1 m Monoid.Dual where
---     liftParseJSON p _ = fmap Monoid.Dual . p
---     {-# INLINE liftParseJSON #-}
 
--- instance MFromJSON m a => MFromJSON m (Monoid.Dual a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
+instance Applicative m => AFromJSON2 m Either where
+    aliftParseJSON2 pA _ pB _ (Object (H.toList -> [(key, value)]))
+        | key == left  = (fmap Left)  <$> pA value <?> Key left
+        | key == right = (fmap Right) <$> pB value <?> Key right
+      where
+        left, right :: Text
+        left  = "Left"
+        right = "Right"
 
+    aliftParseJSON2 _ _ _ _ _ = fail $
+        "expected an object with a single property " ++
+        "where the property key should be either " ++
+        "\"Left\" or \"Right\""
+    {-# INLINE aliftParseJSON2 #-}
 
--- instance MFromJSON1 m Monoid.First where
---     liftParseJSON p p' = fmap Monoid.First . liftParseJSON p p'
---     {-# INLINE liftParseJSON #-}
+instance (AFromJSON m a) => AFromJSON1 m (Either a) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
 
--- instance MFromJSON m a => MFromJSON m (Monoid.First a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
+instance (AFromJSON m a, AFromJSON m b) => AFromJSON m (Either a b) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
 
 
--- instance MFromJSON1 m Monoid.Last where
---     liftParseJSON p p' = fmap Monoid.Last . liftParseJSON p p'
---     {-# INLINE liftParseJSON #-}
+instance Applicative m => AFromJSON m Void where
+    aparseJSON _ = fail "Cannot parse Void"
+    {-# INLINE aparseJSON #-}
 
--- instance MFromJSON m a => MFromJSON m (Monoid.Last a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
+instance Applicative m => AFromJSON m Bool where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
+instance Applicative m => AFromJSON m Ordering where
+    aparseJSON = fmap pure . parseJSON
 
--- instance MFromJSON1 m Semigroup.Min where
---     liftParseJSON p _ a = Semigroup.Min <$> p a
---     {-# INLINE liftParseJSON #-}
+instance Applicative m => AFromJSON m () where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
---     liftParseJSONList _ p a = fmap Semigroup.Min <$> p a
---     {-# INLINE liftParseJSONList #-}
+instance Applicative m => AFromJSON m Char where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
--- instance (MFromJSON m  a) => MFromJSON m (Semigroup.Min a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
+    aparseJSONList = fmap pure . parseJSONList
+    {-# INLINE aparseJSONList #-}
 
---     parseJSONList = liftParseJSONList parseJSON parseJSONList
---     {-# INLINE parseJSONList #-}
+instance Applicative m => AFromJSON m Double where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
 
--- instance MFromJSON1 m Semigroup.Max where
---     liftParseJSON p _ a = Semigroup.Max <$> p a
---     {-# INLINE liftParseJSON #-}
+instance Applicative m => AFromJSON m Float where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
---     liftParseJSONList _ p a = fmap Semigroup.Max <$> p a
---     {-# INLINE liftParseJSONList #-}
+instance (Applicative m, FromJSON a, Integral a) => AFromJSON m (Ratio a) where
+    aparseJSON = fmap pure . parseJSON
 
--- instance (MFromJSON m  a) => MFromJSON m (Semigroup.Max a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
+-- | This instance includes a bounds check to prevent maliciously
+-- large inputs to fill up the memory of the target system. You can
+-- newtype 'Scientific' and provide your own instance using
+-- 'withScientific' if you want to allow larger inputs.
+instance (Applicative m, HasResolution a) => AFromJSON m (Fixed a) where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
---     parseJSONList = liftParseJSONList parseJSON parseJSONList
---     {-# INLINE parseJSONList #-}
+instance Applicative m => AFromJSON m Int where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
+-- | This instance includes a bounds check to prevent maliciously
+-- large inputs to fill up the memory of the target system. You can
+-- newtype 'Scientific' and provide your own instance using
+-- 'withScientific' if you want to allow larger inputs.
+instance Applicative m => AFromJSON m Integer where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
--- instance MFromJSON1 m Semigroup.First where
---     liftParseJSON p _ a = Semigroup.First <$> p a
---     {-# INLINE liftParseJSON #-}
 
---     liftParseJSONList _ p a = fmap Semigroup.First <$> p a
---     {-# INLINE liftParseJSONList #-}
+instance Applicative m => AFromJSON m Natural where
+    aparseJSON = fmap pure . parseJSON
 
--- instance (MFromJSON m  a) => MFromJSON m (Semigroup.First a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
 
---     parseJSONList = liftParseJSONList parseJSON parseJSONList
---     {-# INLINE parseJSONList #-}
+instance Applicative m => AFromJSON m Int8 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
 
--- instance MFromJSON1 m Semigroup.Last where
---     liftParseJSON p _ a = Semigroup.Last <$> p a
---     {-# INLINE liftParseJSON #-}
+instance Applicative m => AFromJSON m Int16 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
---     liftParseJSONList _ p a = fmap Semigroup.Last <$> p a
---     {-# INLINE liftParseJSONList #-}
 
--- instance (MFromJSON m  a) => MFromJSON m (Semigroup.Last a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
+instance Applicative m => AFromJSON m Int32 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
---     parseJSONList = liftParseJSONList parseJSON parseJSONList
---     {-# INLINE parseJSONList #-}
 
+instance Applicative m => AFromJSON m Int64 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
--- instance MFromJSON1 m Semigroup.WrappedMonoid where
---     liftParseJSON p _ a = Semigroup.WrapMonoid <$> p a
---     {-# INLINE liftParseJSON #-}
 
---     liftParseJSONList _ p a = fmap Semigroup.WrapMonoid <$> p a
---     {-# INLINE liftParseJSONList #-}
+instance Applicative m => AFromJSON m Word where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
--- instance (MFromJSON m  a) => MFromJSON m (Semigroup.WrappedMonoid a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
 
---     parseJSONList = liftParseJSONList parseJSON parseJSONList
---     {-# INLINE parseJSONList #-}
-
+instance Applicative m => AFromJSON m Word8 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
 
--- instance MFromJSON1 m Semigroup.Option where
---     liftParseJSON p p' = fmap Semigroup.Option . liftParseJSON p p'
---     {-# INLINE liftParseJSON #-}
 
--- instance MFromJSON m a => MFromJSON m (Semigroup.Option a) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
--- -------------------------------------------------------------------------------
--- -- tagged
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON1 m Proxy where
---     {-# INLINE liftParseJSON #-}
---     liftParseJSON _ _ Null = pure Proxy
---     liftParseJSON _ _ v    = typeMismatch "Proxy" v
-
--- instance MFromJSON m (Proxy a) where
---     {-# INLINE parseJSON #-}
---     parseJSON Null = pure Proxy
---     parseJSON v    = typeMismatch "Proxy" v
-
-
--- instance MFromJSON2 m Tagged where
---     liftParseJSON2 _ _ p _ = fmap Tagged . p
---     {-# INLINE liftParseJSON2 #-}
-
--- instance MFromJSON1 m (Tagged a) where
---     liftParseJSON p _ = fmap Tagged . p
---     {-# INLINE liftParseJSON #-}
-
--- instance MFromJSON m b => MFromJSON m (Tagged a b) where
---     parseJSON = parseJSON1
---     {-# INLINE parseJSON #-}
-
--- instance FromJSONKey b => FromJSONKey (Tagged a b) where
---     fromJSONKey = coerceFromJSONKeyFunction (fromJSONKey :: FromJSONKeyFunction b)
---     fromJSONKeyList = (fmap . fmap) Tagged fromJSONKeyList
-
--- -------------------------------------------------------------------------------
--- -- Instances for converting from map keys
--- -------------------------------------------------------------------------------
-
--- instance (MFromJSON m  a, MFromJSON m b) => FromJSONKey (a,b)
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c) => FromJSONKey (a,b,c)
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d) => FromJSONKey (a,b,c,d)
-
--- instance FromJSONKey Char where
---     fromJSONKey = FromJSONKeyTextParser $ \t ->
---         if T.length t == 1
---             then return (T.index t 0)
---             else typeMismatch "Expected Char but String didn't contain exactly one character" (String t)
---     fromJSONKeyList = FromJSONKeyText T.unpack
-
--- instance (MFromJSON m Key a, MFromJSON m a) => FromJSONKey [a] where
---     fromJSONKey = fromJSONKeyList
-
--- -------------------------------------------------------------------------------
--- -- Tuple instances, see tuple-instances-from.hs
--- -------------------------------------------------------------------------------
-
--- instance MFromJSON2 m (,) where
---     liftParseJSON2 pA _ pB _ = withArray "(a, b)" $ \t ->
---         let n = V.length t
---         in if n == 2
---             then (,)
---                 <$> parseJSONElemAtIndex pA 0 t
---                 <*> parseJSONElemAtIndex pB 1 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 2"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a) => MFromJSON1 m ((,) a) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b) => MFromJSON m (a, b) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a) => MFromJSON2 m ((,,) a) where
---     liftParseJSON2 pB _ pC _ = withArray "(a, b, c)" $ \t ->
---         let n = V.length t
---         in if n == 3
---             then (,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex pB 1 t
---                 <*> parseJSONElemAtIndex pC 2 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 3"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b) => MFromJSON1 m ((,,) a b) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c) => MFromJSON m (a, b, c) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b) => MFromJSON2 m ((,,,) a b) where
---     liftParseJSON2 pC _ pD _ = withArray "(a, b, c, d)" $ \t ->
---         let n = V.length t
---         in if n == 4
---             then (,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex pC 2 t
---                 <*> parseJSONElemAtIndex pD 3 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 4"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c) => MFromJSON1 m ((,,,) a b c) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d) => MFromJSON m (a, b, c, d) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c) => MFromJSON2 m ((,,,,) a b c) where
---     liftParseJSON2 pD _ pE _ = withArray "(a, b, c, d, e)" $ \t ->
---         let n = V.length t
---         in if n == 5
---             then (,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex pD 3 t
---                 <*> parseJSONElemAtIndex pE 4 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 5"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d) => MFromJSON1 m ((,,,,) a b c d) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e) => MFromJSON m (a, b, c, d, e) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d) => MFromJSON2 m ((,,,,,) a b c d) where
---     liftParseJSON2 pE _ pF _ = withArray "(a, b, c, d, e, f)" $ \t ->
---         let n = V.length t
---         in if n == 6
---             then (,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex pE 4 t
---                 <*> parseJSONElemAtIndex pF 5 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 6"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e) => MFromJSON1 m ((,,,,,) a b c d e) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f) => MFromJSON m (a, b, c, d, e, f) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e) => MFromJSON2 m ((,,,,,,) a b c d e) where
---     liftParseJSON2 pF _ pG _ = withArray "(a, b, c, d, e, f, g)" $ \t ->
---         let n = V.length t
---         in if n == 7
---             then (,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex pF 5 t
---                 <*> parseJSONElemAtIndex pG 6 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 7"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f) => MFromJSON1 m ((,,,,,,) a b c d e f) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g) => MFromJSON m (a, b, c, d, e, f, g) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f) => MFromJSON2 m ((,,,,,,,) a b c d e f) where
---     liftParseJSON2 pG _ pH _ = withArray "(a, b, c, d, e, f, g, h)" $ \t ->
---         let n = V.length t
---         in if n == 8
---             then (,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex pG 6 t
---                 <*> parseJSONElemAtIndex pH 7 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 8"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g) => MFromJSON1 m ((,,,,,,,) a b c d e f g) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h) => MFromJSON m (a, b, c, d, e, f, g, h) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g) => MFromJSON2 m ((,,,,,,,,) a b c d e f g) where
---     liftParseJSON2 pH _ pI _ = withArray "(a, b, c, d, e, f, g, h, i)" $ \t ->
---         let n = V.length t
---         in if n == 9
---             then (,,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex parseJSON 6 t
---                 <*> parseJSONElemAtIndex pH 7 t
---                 <*> parseJSONElemAtIndex pI 8 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 9"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h) => MFromJSON1 m ((,,,,,,,,) a b c d e f g h) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i) => MFromJSON m (a, b, c, d, e, f, g, h, i) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h) => MFromJSON2 m ((,,,,,,,,,) a b c d e f g h) where
---     liftParseJSON2 pI _ pJ _ = withArray "(a, b, c, d, e, f, g, h, i, j)" $ \t ->
---         let n = V.length t
---         in if n == 10
---             then (,,,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex parseJSON 6 t
---                 <*> parseJSONElemAtIndex parseJSON 7 t
---                 <*> parseJSONElemAtIndex pI 8 t
---                 <*> parseJSONElemAtIndex pJ 9 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 10"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i) => MFromJSON1 m ((,,,,,,,,,) a b c d e f g h i) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j) => MFromJSON m (a, b, c, d, e, f, g, h, i, j) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i) => MFromJSON2 m ((,,,,,,,,,,) a b c d e f g h i) where
---     liftParseJSON2 pJ _ pK _ = withArray "(a, b, c, d, e, f, g, h, i, j, k)" $ \t ->
---         let n = V.length t
---         in if n == 11
---             then (,,,,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex parseJSON 6 t
---                 <*> parseJSONElemAtIndex parseJSON 7 t
---                 <*> parseJSONElemAtIndex parseJSON 8 t
---                 <*> parseJSONElemAtIndex pJ 9 t
---                 <*> parseJSONElemAtIndex pK 10 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 11"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j) => MFromJSON1 m ((,,,,,,,,,,) a b c d e f g h i j) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k) => MFromJSON m (a, b, c, d, e, f, g, h, i, j, k) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j) => MFromJSON2 m ((,,,,,,,,,,,) a b c d e f g h i j) where
---     liftParseJSON2 pK _ pL _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l)" $ \t ->
---         let n = V.length t
---         in if n == 12
---             then (,,,,,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex parseJSON 6 t
---                 <*> parseJSONElemAtIndex parseJSON 7 t
---                 <*> parseJSONElemAtIndex parseJSON 8 t
---                 <*> parseJSONElemAtIndex parseJSON 9 t
---                 <*> parseJSONElemAtIndex pK 10 t
---                 <*> parseJSONElemAtIndex pL 11 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 12"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k) => MFromJSON1 m ((,,,,,,,,,,,) a b c d e f g h i j k) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l) => MFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k) => MFromJSON2 m ((,,,,,,,,,,,,) a b c d e f g h i j k) where
---     liftParseJSON2 pL _ pM _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l, m)" $ \t ->
---         let n = V.length t
---         in if n == 13
---             then (,,,,,,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex parseJSON 6 t
---                 <*> parseJSONElemAtIndex parseJSON 7 t
---                 <*> parseJSONElemAtIndex parseJSON 8 t
---                 <*> parseJSONElemAtIndex parseJSON 9 t
---                 <*> parseJSONElemAtIndex parseJSON 10 t
---                 <*> parseJSONElemAtIndex pL 11 t
---                 <*> parseJSONElemAtIndex pM 12 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 13"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l) => MFromJSON1 m ((,,,,,,,,,,,,) a b c d e f g h i j k l) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l, MFromJSON m m) => MFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l, m) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l) => MFromJSON2 m ((,,,,,,,,,,,,,) a b c d e f g h i j k l) where
---     liftParseJSON2 pM _ pN _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l, m, n)" $ \t ->
---         let n = V.length t
---         in if n == 14
---             then (,,,,,,,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex parseJSON 6 t
---                 <*> parseJSONElemAtIndex parseJSON 7 t
---                 <*> parseJSONElemAtIndex parseJSON 8 t
---                 <*> parseJSONElemAtIndex parseJSON 9 t
---                 <*> parseJSONElemAtIndex parseJSON 10 t
---                 <*> parseJSONElemAtIndex parseJSON 11 t
---                 <*> parseJSONElemAtIndex pM 12 t
---                 <*> parseJSONElemAtIndex pN 13 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 14"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l, MFromJSON m m) => MFromJSON1 m ((,,,,,,,,,,,,,) a b c d e f g h i j k l m) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l, MFromJSON m m, MFromJSON m n) => MFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l, m, n) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
-
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l, MFromJSON m m) => MFromJSON2 m ((,,,,,,,,,,,,,,) a b c d e f g h i j k l m) where
---     liftParseJSON2 pN _ pO _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)" $ \t ->
---         let n = V.length t
---         in if n == 15
---             then (,,,,,,,,,,,,,,)
---                 <$> parseJSONElemAtIndex parseJSON 0 t
---                 <*> parseJSONElemAtIndex parseJSON 1 t
---                 <*> parseJSONElemAtIndex parseJSON 2 t
---                 <*> parseJSONElemAtIndex parseJSON 3 t
---                 <*> parseJSONElemAtIndex parseJSON 4 t
---                 <*> parseJSONElemAtIndex parseJSON 5 t
---                 <*> parseJSONElemAtIndex parseJSON 6 t
---                 <*> parseJSONElemAtIndex parseJSON 7 t
---                 <*> parseJSONElemAtIndex parseJSON 8 t
---                 <*> parseJSONElemAtIndex parseJSON 9 t
---                 <*> parseJSONElemAtIndex parseJSON 10 t
---                 <*> parseJSONElemAtIndex parseJSON 11 t
---                 <*> parseJSONElemAtIndex parseJSON 12 t
---                 <*> parseJSONElemAtIndex pN 13 t
---                 <*> parseJSONElemAtIndex pO 14 t
---             else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 15"
---     {-# INLINE liftParseJSON2 #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l, MFromJSON m m, MFromJSON m n) => MFromJSON1 m ((,,,,,,,,,,,,,,) a b c d e f g h i j k l m n) where
---     liftParseJSON = liftParseJSON2 parseJSON parseJSONList
---     {-# INLINE liftParseJSON #-}
-
--- instance (MFromJSON m  a, MFromJSON m b, MFromJSON m c, MFromJSON m d, MFromJSON m e, MFromJSON m f, MFromJSON m g, MFromJSON m h, MFromJSON m i, MFromJSON m j, MFromJSON m k, MFromJSON m l, MFromJSON m m, MFromJSON m n, MFromJSON m o) => MFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l, m, n, o) where
---     parseJSON = parseJSON2
---     {-# INLINE parseJSON #-}
+instance Applicative m => AFromJSON m Word16 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON m Word32 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON m Word64 where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON m CTime where
+    aparseJSON = fmap (fmap CTime) . aparseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON m Text where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON m LT.Text where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON m Version where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+
+-------------------------------------------------------------------------------
+-- semigroups NonEmpty
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON1 m NonEmpty where
+    aliftParseJSON p _ = withArray "NonEmpty a" $
+        \arr -> do
+            let as = V.toList arr
+            case as of
+                [] -> fail "Expected a NonEmpty but got an empty list"
+                (x : xs) -> getCompose $
+                    (:|) <$> (Compose $ _parseIndexedJSON p 0 x)
+                         <*> (sequenceA $ Compose <$> zipWith (_parseIndexedJSON p) [1..] xs)
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a) => AFromJSON m (NonEmpty a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- scientific
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON m Scientific where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- DList
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON1 m DList.DList where
+    aliftParseJSON p _ = withArray "DList a" $
+      getCompose . fmap DList.fromList .
+      sequenceA . fmap Compose . zipWith (_parseIndexedJSON p) [0..] . V.toList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a) => AFromJSON m (DList.DList a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- tranformers - Functors
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON1 m Identity where
+    aliftParseJSON p _ a = fmap Identity <$> p a
+    {-# INLINE aliftParseJSON #-}
+
+    aliftParseJSONList _ p a = fmap (fmap Identity) <$> p a
+    {-# INLINE aliftParseJSONList #-}
+
+instance (AFromJSON m a) => AFromJSON m (Identity a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+    aparseJSONList = aliftParseJSONList aparseJSON aparseJSONList
+    {-# INLINE aparseJSONList #-}
+
+
+instance (AFromJSON1 m  f, AFromJSON1 m g) => AFromJSON1 m (Compose f g) where
+    aliftParseJSON p pl a = fmap Compose <$> aliftParseJSON g gl a
+      where
+        g  = aliftParseJSON p pl
+        gl = aliftParseJSONList p pl
+    {-# INLINE aliftParseJSON #-}
+
+    aliftParseJSONList p pl a = fmap (fmap Compose) <$> aliftParseJSONList g gl a
+      where
+        g  = aliftParseJSON p pl
+        gl = aliftParseJSONList p pl
+    {-# INLINE aliftParseJSONList #-}
+
+instance (AFromJSON1 m  f, AFromJSON1 m g, AFromJSON m a) => AFromJSON m (Compose f g a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+    aparseJSONList = aliftParseJSONList aparseJSON aparseJSONList
+    {-# INLINE aparseJSONList #-}
+
+
+instance (AFromJSON1 m  f, AFromJSON1 m g) => AFromJSON1 m (Product f g) where
+    aliftParseJSON p pl a = fmap (uncurry Pair) <$> aliftParseJSON2 px pxl py pyl a
+      where
+        px  = aliftParseJSON p pl
+        pxl = aliftParseJSONList p pl
+        py  = aliftParseJSON p pl
+        pyl = aliftParseJSONList p pl
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON1 m f, AFromJSON1 m g, AFromJSON m a) => AFromJSON m (Product f g a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON1 m  f, AFromJSON1 m g) => AFromJSON1 m (Sum f g) where
+    aliftParseJSON p pl (Object (H.toList -> [(key, value)]))
+        | key == inl = fmap InL <$> aliftParseJSON p pl value <?> Key inl
+        | key == inr = fmap InR <$> aliftParseJSON p pl value <?> Key inl
+      where
+        inl, inr :: Text
+        inl = "InL"
+        inr = "InR"
+
+    aliftParseJSON _ _ _ = fail $
+        "expected an object with a single property " ++
+        "where the property key should be either " ++
+        "\"InL\" or \"InR\""
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON1 m  f, AFromJSON1 m g, AFromJSON m a) => AFromJSON m (Sum f g a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- containers
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON1 m Seq.Seq where
+    aliftParseJSON p _ = withArray "Seq a" $
+      getCompose . fmap Seq.fromList .
+      sequenceA . fmap Compose . zipWith (_parseIndexedJSON p) [0..] . V.toList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a) => AFromJSON m (Seq.Seq a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+
+instance (Ord a, AFromJSON m a) => AFromJSON m (Set.Set a) where
+    aparseJSON = fmap (fmap Set.fromList) . aparseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON m IntSet.IntSet where
+    aparseJSON = fmap (fmap IntSet.fromList) . aparseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON1 m IntMap.IntMap where
+    aliftParseJSON p pl = fmap (fmap IntMap.fromList) . aliftParseJSON p' pl'
+      where
+        p'  = aliftParseJSON2     aparseJSON aparseJSONList p pl
+        pl' = aliftParseJSONList2 aparseJSON aparseJSONList p pl
+    {-# INLINE aliftParseJSON #-}
+
+instance AFromJSON m a => AFromJSON m (IntMap.IntMap a) where
+    aparseJSON = fmap (fmap IntMap.fromList) . aparseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance (Applicative m, FromJSONKey k, Ord k) => AFromJSON1 m (M.Map k) where
+    aliftParseJSON p _ = case fromJSONKey of
+        FromJSONKeyCoerce _ -> withObject "Map k v" $
+            H.foldrWithKey (\k v m -> getCompose $ M.insert
+                <$> (Compose $ (pure . pure $ unsafeCoerce k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
+                <*> Compose m)
+                (pure $ pure M.empty)
+
+        FromJSONKeyText f -> withObject "Map k v" $
+            H.foldrWithKey (\k v m -> getCompose $ M.insert
+                <$> (Compose $ (pure . pure $ f k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
+                <*> Compose m)
+                (pure $ pure M.empty)
+
+        FromJSONKeyTextParser f -> withObject "Map k v" $
+            H.foldrWithKey (\k v m -> getCompose $ M.insert
+                <$> (Compose $ (pure <$> f k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
+                <*> Compose m)
+                (pure $ pure M.empty)
+
+        FromJSONKeyValue f -> withArray "Map k v" $ \arr ->
+            getCompose $ M.fromList <$> (
+                -- [Compose (a, b)] -> Compose [(a, b)]
+                sequenceA
+                . fmap Compose
+                -- [Parser m (a, b)]
+                . zipWith (_parseIndexedJSONPair ((<$>) . (,)) f p) [0..] . V.toList $ arr)
+    {-# INLINE aliftParseJSON #-}
+
+instance (FromJSONKey k, Ord k, AFromJSON m v) => AFromJSON m (M.Map k v) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON1 m Tree.Tree where
+    aliftParseJSON p pl = go
+      where
+        go v = fmap (uncurry Tree.Node) <$> aliftParseJSON2 p pl p' pl' v
+
+        p' = aliftParseJSON go (alistParser go)
+        pl'= aliftParseJSONList go (alistParser go)
+
+instance (AFromJSON m v) => AFromJSON m (Tree.Tree v) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- uuid
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON m UUID.UUID where
+    aparseJSON = fmap pure . parseJSON
+
+-------------------------------------------------------------------------------
+-- vector
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON1 m Vector where
+    aliftParseJSON p _ = withArray "Vector a" $ getCompose .
+        traverse (Compose . uncurry (_parseIndexedJSON p)) . V.indexed
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a) => AFromJSON m (Vector a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+
+mvectorParseJSON :: (AFromJSON m a, VG.Vector w a) => String -> Value -> Parser (m (w a))
+mvectorParseJSON s = withArray s $ getCompose . fmap V.convert
+    . traverse (Compose . uncurry (_parseIndexedJSON aparseJSON)) . V.indexed
+{-# INLINE mvectorParseJSON #-}
+
+instance (Storable a, AFromJSON m a) => AFromJSON m (VS.Vector a) where
+    aparseJSON = mvectorParseJSON "Data.Vector.Storable.Vector a"
+
+instance (VP.Prim a, AFromJSON m a) => AFromJSON m (VP.Vector a) where
+    aparseJSON = mvectorParseJSON "Data.Vector.Primitive.Vector a"
+    {-# INLINE aparseJSON #-}
+
+instance (VG.Vector VU.Vector a, AFromJSON m a) => AFromJSON m (VU.Vector a) where
+    aparseJSON = mvectorParseJSON "Data.Vector.Unboxed.Vector a"
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- unordered-containers
+-------------------------------------------------------------------------------
+
+instance (Eq a, Hashable a, AFromJSON m a) => AFromJSON m (HashSet.HashSet a) where
+    aparseJSON = fmap (fmap HashSet.fromList) . aparseJSON
+    {-# INLINE aparseJSON #-}
+
+
+instance (Applicative m, FromJSONKey k, Eq k, Hashable k) => AFromJSON1 m (H.HashMap k) where
+    aliftParseJSON p _ = case fromJSONKey of
+        FromJSONKeyCoerce _ -> withObject "HashMap ~Text v" $
+            H.foldrWithKey (\k v m -> getCompose $ H.insert
+                <$> (Compose $ (pure . pure $ unsafeCoerce k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
+                <*> Compose m)
+                (pure $ pure H.empty)
+
+        FromJSONKeyText f -> withObject "HashMap k v" $
+            H.foldrWithKey (\k v m -> getCompose $ H.insert
+                <$> (Compose $ (pure . pure $ f k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
+                <*> Compose m)
+                (pure $ pure H.empty)
+
+        FromJSONKeyTextParser f -> withObject "HashMap k v" $
+            H.foldrWithKey (\k v m -> getCompose $ H.insert
+                <$> (Compose $ (pure <$> f k) <?> Key k)
+                <*> (Compose $ p v <?> Key k)
+                <*> Compose m)
+                (pure $ pure H.empty)
+
+        FromJSONKeyValue f -> withArray "HashMap k v" $ \arr ->
+            getCompose $ H.fromList <$> (
+                -- [Compose (a, b)] -> Compose [(a, b)]
+                sequenceA
+                . fmap Compose
+                -- [Parser m (a, b)]
+                . zipWith (_parseIndexedJSONPair ((<$>) . (,)) f p) [0..] . V.toList $ arr)
+
+instance (AFromJSON m  v, FromJSONKey k, Eq k, Hashable k) => AFromJSON m (H.HashMap k v) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- aeson
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON m Value where
+    aparseJSON = pure . pure
+    {-# INLINE aparseJSON #-}
+
+instance Applicative m => AFromJSON m DotNetTime where
+    aparseJSON = fmap pure . parseJSON
+
+-------------------------------------------------------------------------------
+-- primitive
+-------------------------------------------------------------------------------
+
+#if MIN_VERSION_primitive(0,6,4)
+instance AFromJSON m a => AFromJSON m (PM.Array a) where
+  -- note: we could do better than this if vector exposed the data
+  -- constructor in Data.Vector.
+  aparseJSON = fmap (fmap Exts.fromList) . aparseJSON
+
+instance AFromJSON m a => AFromJSON m (PM.SmallArray a) where
+  aparseJSON = fmap (fmap Exts.fromList) . aparseJSON
+
+instance (PM.Prim a,FromJSON a) => AFromJSON m (PM.PrimArray a) where
+  aparseJSON = fmap (fmap Exts.fromList) . aparseJSON
+
+instance (PM.PrimUnlifted a,FromJSON a) => AFromJSON m (PM.UnliftedArray a) where
+  aparseJSON = fmap (fmap Exts.fromList) . aparseJSON
+#endif
+
+-------------------------------------------------------------------------------
+-- time
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON m Day where
+    aparseJSON = fmap pure . parseJSON
+
+
+instance Applicative m => AFromJSON m TimeOfDay where
+    aparseJSON = fmap pure . parseJSON
+
+
+instance Applicative m => AFromJSON m LocalTime where
+    aparseJSON = fmap pure . parseJSON
+
+
+-- | Supported string formats:
+--
+-- @YYYY-MM-DD HH:MM Z@
+-- @YYYY-MM-DD HH:MM:SS Z@
+-- @YYYY-MM-DD HH:MM:SS.SSS Z@
+--
+-- The first space may instead be a @T@, and the second space is
+-- optional.  The @Z@ represents UTC.  The @Z@ may be replaced with a
+-- time zone offset of the form @+0000@ or @-08:00@, where the first
+-- two digits are hours, the @:@ is optional and the second two digits
+-- (also optional) are minutes.
+instance Applicative m => AFromJSON m ZonedTime where
+    aparseJSON = fmap pure . parseJSON
+
+
+instance Applicative m => AFromJSON m UTCTime where
+    aparseJSON = fmap pure . parseJSON
+
+
+-- | This instance includes a bounds check to prevent maliciously
+-- large inputs to fill up the memory of the target system. You can
+-- newtype 'Scientific' and provide your own instance using
+-- 'withScientific' if you want to allow larger inputs.
+instance Applicative m => AFromJSON m NominalDiffTime where
+    aparseJSON = fmap pure . parseJSON
+    {-# INLINE aparseJSON #-}
+
+
+-- | This instance includes a bounds check to prevent maliciously
+-- large inputs to fill up the memory of the target system. You can
+-- newtype 'Scientific' and provide your own instance using
+-- 'withScientific' if you want to allow larger inputs.
+instance Applicative m => AFromJSON m DiffTime where
+    aparseJSON = _withBoundedScientific "NominalDiffTime" $ pure . pure . realToFrac
+      where
+        -- | @'withBoundedScientific' expected f value@ applies @f@ to the 'Scientific' number
+        -- when @value@ is a 'Number' and fails using @'typeMismatch' expected@
+        -- otherwise.
+        --
+        -- The conversion will also fail with a @'typeMismatch' if the
+        -- 'Scientific' exponent is larger than 1024.
+        _withBoundedScientific :: String -> (Scientific -> Parser a) -> Value -> Parser a
+        _withBoundedScientific _ f v@(Number scientific) =
+            if base10Exponent scientific > 1024
+            then typeMismatch "a number with exponent <= 1024" v
+            else f scientific
+        _withBoundedScientific expected _ v                   = typeMismatch expected v
+        {-# INLINE _withBoundedScientific #-}
+    {-# INLINE aparseJSON #-}
+-------------------------------------------------------------------------------
+-- base Monoid/Semigroup
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON1 m Monoid.Dual where
+    aliftParseJSON p _ = fmap (fmap Monoid.Dual) . p
+    {-# INLINE aliftParseJSON #-}
+
+instance AFromJSON m a => AFromJSON m (Monoid.Dual a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON1 m Monoid.First where
+    aliftParseJSON p p' = fmap (fmap Monoid.First) . aliftParseJSON p p'
+    {-# INLINE aliftParseJSON #-}
+
+instance AFromJSON m a => AFromJSON m (Monoid.First a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON1 m Monoid.Last where
+    aliftParseJSON p p' = fmap (fmap Monoid.Last) . aliftParseJSON p p'
+    {-# INLINE aliftParseJSON #-}
+
+instance AFromJSON m a => AFromJSON m (Monoid.Last a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+
+instance Applicative m => AFromJSON1 m Semigroup.Min where
+    aliftParseJSON p _ a = fmap Semigroup.Min <$> p a
+    {-# INLINE aliftParseJSON #-}
+
+    aliftParseJSONList _ p a = fmap (fmap Semigroup.Min) <$> p a
+    {-# INLINE aliftParseJSONList #-}
+
+instance (AFromJSON m a) => AFromJSON m (Semigroup.Min a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+    aparseJSONList = aliftParseJSONList aparseJSON aparseJSONList
+    {-# INLINE aparseJSONList #-}
+
+
+instance Applicative m => AFromJSON1 m Semigroup.Max where
+    aliftParseJSON p _ a = fmap Semigroup.Max <$> p a
+    {-# INLINE aliftParseJSON #-}
+
+    aliftParseJSONList _ p a = fmap (fmap Semigroup.Max) <$> p a
+    {-# INLINE aliftParseJSONList #-}
+
+instance (AFromJSON m a) => AFromJSON m (Semigroup.Max a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+    aparseJSONList = aliftParseJSONList aparseJSON aparseJSONList
+    {-# INLINE aparseJSONList #-}
+
+
+instance Applicative m => AFromJSON1 m Semigroup.First where
+    aliftParseJSON p _ a = fmap Semigroup.First <$> p a
+    {-# INLINE aliftParseJSON #-}
+
+    aliftParseJSONList _ p a = fmap (fmap Semigroup.First) <$> p a
+    {-# INLINE aliftParseJSONList #-}
+
+instance (AFromJSON m a) => AFromJSON m (Semigroup.First a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+    aparseJSONList = aliftParseJSONList aparseJSON aparseJSONList
+    {-# INLINE aparseJSONList #-}
+
+
+instance Applicative m => AFromJSON1 m Semigroup.Last where
+    aliftParseJSON p _ a = fmap Semigroup.Last <$> p a
+    {-# INLINE aliftParseJSON #-}
+
+    aliftParseJSONList _ p a = fmap (fmap Semigroup.Last) <$> p a
+    {-# INLINE aliftParseJSONList #-}
+
+instance (AFromJSON m a) => AFromJSON m (Semigroup.Last a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+    aparseJSONList = aliftParseJSONList aparseJSON aparseJSONList
+    {-# INLINE aparseJSONList #-}
+
+
+instance Applicative m => AFromJSON1 m Semigroup.WrappedMonoid where
+    aliftParseJSON p _ a = fmap Semigroup.WrapMonoid <$> p a
+    {-# INLINE aliftParseJSON #-}
+
+    aliftParseJSONList _ p a = fmap (fmap Semigroup.WrapMonoid) <$> p a
+    {-# INLINE aliftParseJSONList #-}
+
+instance (AFromJSON m a) => AFromJSON m (Semigroup.WrappedMonoid a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+    aparseJSONList = aliftParseJSONList aparseJSON aparseJSONList
+    {-# INLINE aparseJSONList #-}
+
+
+instance Applicative m => AFromJSON1 m Semigroup.Option where
+    aliftParseJSON p p' = fmap (fmap Semigroup.Option) . aliftParseJSON p p'
+    {-# INLINE aliftParseJSON #-}
+
+instance AFromJSON m a => AFromJSON m (Semigroup.Option a) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- tagged
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON1 m Proxy where
+    {-# INLINE aliftParseJSON #-}
+    aliftParseJSON _ _ Null = pure $ pure Proxy
+    aliftParseJSON _ _ v    = typeMismatch "Proxy" v
+
+instance Applicative m => AFromJSON m (Proxy a) where
+    {-# INLINE aparseJSON #-}
+    aparseJSON Null = pure $ pure Proxy
+    aparseJSON v    = typeMismatch "Proxy" v
+
+
+instance Applicative m => AFromJSON2 m Tagged where
+    aliftParseJSON2 _ _ p _ = fmap (fmap Tagged) . p
+    {-# INLINE aliftParseJSON2 #-}
+
+instance Applicative m => AFromJSON1 m (Tagged a) where
+    aliftParseJSON p _ = fmap (fmap Tagged) . p
+    {-# INLINE aliftParseJSON #-}
+
+instance AFromJSON m b => AFromJSON m (Tagged a b) where
+    aparseJSON = aparseJSON1
+    {-# INLINE aparseJSON #-}
+
+-------------------------------------------------------------------------------
+-- Tuple instances, see tuple-instances-from.hs
+-------------------------------------------------------------------------------
+
+instance Applicative m => AFromJSON2 m (,) where
+    aliftParseJSON2 pA _ pB _ = withArray "(a, b)" $ \t ->
+        let n = V.length t
+        in if n == 2
+            then getCompose $ (,)
+                <$> Compose (_parseJSONElemAtIndex pA 0 t)
+                <*> Compose (_parseJSONElemAtIndex pB 1 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 2"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a) => AFromJSON1 m ((,) a) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b) => AFromJSON m (a, b) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a) => AFromJSON2 m ((,,) a) where
+    aliftParseJSON2 pB _ pC _ = withArray "(a, b, c)" $ \t ->
+        let n = V.length t
+        in if n == 3
+            then getCompose $ (,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex pB 1 t)
+                <*> Compose (_parseJSONElemAtIndex pC 2 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 3"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b) => AFromJSON1 m ((,,) a b) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c) => AFromJSON m (a, b, c) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b) => AFromJSON2 m ((,,,) a b) where
+    aliftParseJSON2 pC _ pD _ = withArray "(a, b, c, d)" $ \t ->
+        let n = V.length t
+        in if n == 4
+            then getCompose $ (,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex pC 2 t)
+                <*> Compose (_parseJSONElemAtIndex pD 3 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 4"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c) => AFromJSON1 m ((,,,) a b c) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d) => AFromJSON m (a, b, c, d) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c) => AFromJSON2 m ((,,,,) a b c) where
+    aliftParseJSON2 pD _ pE _ = withArray "(a, b, c, d, e)" $ \t ->
+        let n = V.length t
+        in if n == 5
+            then getCompose $ (,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex pD 3 t)
+                <*> Compose (_parseJSONElemAtIndex pE 4 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 5"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d) => AFromJSON1 m ((,,,,) a b c d) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e) => AFromJSON m (a, b, c, d, e) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d) => AFromJSON2 m ((,,,,,) a b c d) where
+    aliftParseJSON2 pE _ pF _ = withArray "(a, b, c, d, e, f)" $ \t ->
+        let n = V.length t
+        in if n == 6
+            then getCompose $ (,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex pE 4 t)
+                <*> Compose (_parseJSONElemAtIndex pF 5 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 6"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e) => AFromJSON1 m ((,,,,,) a b c d e) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f) => AFromJSON m (a, b, c, d, e, f) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e) => AFromJSON2 m ((,,,,,,) a b c d e) where
+    aliftParseJSON2 pF _ pG _ = withArray "(a, b, c, d, e, f, g)" $ \t ->
+        let n = V.length t
+        in if n == 7
+            then getCompose $ (,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex pF 5 t)
+                <*> Compose (_parseJSONElemAtIndex pG 6 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 7"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f) => AFromJSON1 m ((,,,,,,) a b c d e f) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g) => AFromJSON m (a, b, c, d, e, f, g) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f) => AFromJSON2 m ((,,,,,,,) a b c d e f) where
+    aliftParseJSON2 pG _ pH _ = withArray "(a, b, c, d, e, f, g, h)" $ \t ->
+        let n = V.length t
+        in if n == 8
+            then getCompose $ (,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex pG 6 t)
+                <*> Compose (_parseJSONElemAtIndex pH 7 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 8"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g) => AFromJSON1 m ((,,,,,,,) a b c d e f g) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h) => AFromJSON m (a, b, c, d, e, f, g, h) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g) => AFromJSON2 m ((,,,,,,,,) a b c d e f g) where
+    aliftParseJSON2 pH _ pI _ = withArray "(a, b, c, d, e, f, g, h, i)" $ \t ->
+        let n = V.length t
+        in if n == 9
+            then getCompose $ (,,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 6 t)
+                <*> Compose (_parseJSONElemAtIndex pH 7 t)
+                <*> Compose (_parseJSONElemAtIndex pI 8 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 9"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h) => AFromJSON1 m ((,,,,,,,,) a b c d e f g h) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i) => AFromJSON m (a, b, c, d, e, f, g, h, i) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h) => AFromJSON2 m ((,,,,,,,,,) a b c d e f g h) where
+    aliftParseJSON2 pI _ pJ _ = withArray "(a, b, c, d, e, f, g, h, i, j)" $ \t ->
+        let n = V.length t
+        in if n == 10
+            then getCompose $ (,,,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 6 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 7 t)
+                <*> Compose (_parseJSONElemAtIndex pI 8 t)
+                <*> Compose (_parseJSONElemAtIndex pJ 9 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 10"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i) => AFromJSON1 m ((,,,,,,,,,) a b c d e f g h i) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j) => AFromJSON m (a, b, c, d, e, f, g, h, i, j) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i) => AFromJSON2 m ((,,,,,,,,,,) a b c d e f g h i) where
+    aliftParseJSON2 pJ _ pK _ = withArray "(a, b, c, d, e, f, g, h, i, j, k)" $ \t ->
+        let n = V.length t
+        in if n == 11
+            then getCompose $ (,,,,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 6 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 7 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 8 t)
+                <*> Compose (_parseJSONElemAtIndex pJ 9 t)
+                <*> Compose (_parseJSONElemAtIndex pK 10 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 11"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j) => AFromJSON1 m ((,,,,,,,,,,) a b c d e f g h i j) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k) => AFromJSON m (a, b, c, d, e, f, g, h, i, j, k) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j) => AFromJSON2 m ((,,,,,,,,,,,) a b c d e f g h i j) where
+    aliftParseJSON2 pK _ pL _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l)" $ \t ->
+        let n = V.length t
+        in if n == 12
+            then getCompose $ (,,,,,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 6 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 7 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 8 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 9 t)
+                <*> Compose (_parseJSONElemAtIndex pK 10 t)
+                <*> Compose (_parseJSONElemAtIndex pL 11 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 12"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k) => AFromJSON1 m ((,,,,,,,,,,,) a b c d e f g h i j k) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l) => AFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k) => AFromJSON2 m ((,,,,,,,,,,,,) a b c d e f g h i j k) where
+    aliftParseJSON2 pL _ pM _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l, m)" $ \t ->
+        let n = V.length t
+        in if n == 13
+            then getCompose $ (,,,,,,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 6 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 7 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 8 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 9 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 10 t)
+                <*> Compose (_parseJSONElemAtIndex pL 11 t)
+                <*> Compose (_parseJSONElemAtIndex pM 12 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 13"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l) => AFromJSON1 m ((,,,,,,,,,,,,) a b c d e f g h i j k l) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l, AFromJSON m m') => AFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l, m') where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l) => AFromJSON2 m ((,,,,,,,,,,,,,) a b c d e f g h i j k l) where
+    aliftParseJSON2 pM _ pN _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l, m, n)" $ \t ->
+        let n = V.length t
+        in if n == 14
+            then getCompose $ (,,,,,,,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 6 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 7 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 8 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 9 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 10 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 11 t)
+                <*> Compose (_parseJSONElemAtIndex pM 12 t)
+                <*> Compose (_parseJSONElemAtIndex pN 13 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 14"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l, AFromJSON m m') => AFromJSON1 m ((,,,,,,,,,,,,,) a b c d e f g h i j k l m') where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l, AFromJSON m m', AFromJSON m n) => AFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l, m', n) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
+
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l, AFromJSON m m') => AFromJSON2 m ((,,,,,,,,,,,,,,) a b c d e f g h i j k l m') where
+    aliftParseJSON2 pN _ pO _ = withArray "(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o)" $ \t ->
+        let n = V.length t
+        in if n == 15
+            then getCompose $ (,,,,,,,,,,,,,,)
+                <$> Compose (_parseJSONElemAtIndex aparseJSON 0 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 1 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 2 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 3 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 4 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 5 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 6 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 7 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 8 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 9 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 10 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 11 t)
+                <*> Compose (_parseJSONElemAtIndex aparseJSON 12 t)
+                <*> Compose (_parseJSONElemAtIndex pN 13 t)
+                <*> Compose (_parseJSONElemAtIndex pO 14 t)
+            else fail $ "cannot unpack array of length " ++ show n ++ " into a tuple of length 15"
+    {-# INLINE aliftParseJSON2 #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l, AFromJSON m m', AFromJSON m n) => AFromJSON1 m ((,,,,,,,,,,,,,,) a b c d e f g h i j k l m' n) where
+    aliftParseJSON = aliftParseJSON2 aparseJSON aparseJSONList
+    {-# INLINE aliftParseJSON #-}
+
+instance (AFromJSON m a, AFromJSON m b, AFromJSON m c, AFromJSON m d, AFromJSON m e, AFromJSON m f, AFromJSON m g, AFromJSON m h, AFromJSON m i, AFromJSON m j, AFromJSON m k, AFromJSON m l, AFromJSON m m', AFromJSON m n, AFromJSON m o) => AFromJSON m (a, b, c, d, e, f, g, h, i, j, k, l, m', n, o) where
+    aparseJSON = aparseJSON2
+    {-# INLINE aparseJSON #-}
