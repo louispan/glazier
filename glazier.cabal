@@ -15,41 +15,23 @@ tested-with:         GHC == 8.4.1
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Data.Aeson.Applicative
-                       Data.Aeson.Applicative.Internal.Generic
-                       Data.Aeson.Applicative.Internal.ToJSON
-                       Data.Aeson.Applicative.Internal.FromJSON
-                       Glazier.Command
+  exposed-modules:     Glazier.Command
                        Glazier.Command.Exec
                        Glazier.Command.Internal
                        Glazier.Benign
                        Glazier.Benign.Internal
   build-depends:       base >= 4.7 && < 5
-                     , aeson >= 1.1.2.0
                      , alternators >= 1.0
-                     , attoparsec >= 0.13
-                     , base-compat >= 0.9
-                     , bytestring >= 0.10
-                     , containers >= 0.5
-                     , contravariant >= 1.4
                      , data-diverse >= 4.6
                      , data-diverse-lens >= 4.3
                      , dlist >= 0.8
-                     , hashable >= 1.2
-                     , lens >= 4
-                     , mtl >= 2
-                     , primitive >= 0.6
-                     , scientific >= 0.3
+                     , lens >= 4.14
+                     , mtl >= 2.2
+                     , stm >= 2.4
                      , tagged >= 0.8
-                     , text >= 1.2
-                     , time >=1.6
-                     , time-locale-compat >= 0.1
-                     , transformers >= 0.4
+                     , transformers >= 0.3
                      , unliftio >= 0.2
-                     , uuid-types >= 1.0
                      , unliftio-core >= 0.1
-                     , unordered-containers >= 0.2.7
-                     , vector >= 0.11
   ghc-options:        -Wall -Wredundant-constraints
   default-language:    Haskell2010
 
@@ -59,17 +41,17 @@ test-suite glazier-test
   main-is:             Spec.hs
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 1.0
-                     , glazier
                      , data-diverse >= 4.6
                      , data-diverse-lens >= 4.3
+                     , dlist >= 0.8
+                     , glazier
                      , lens >= 4.14
                      , mtl >= 2.2
-                     , dlist >= 0.8
+                     , stm >= 2.4
+                     , tagged >= 0.8
                      , transformers >= 0.3
                      , unliftio >= 0.2
                      , unliftio-core >= 0.1
-                     , stm >= 2.4
-                     , tagged >= 0.8
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall
   default-language:    Haskell2010
 
