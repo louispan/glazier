@@ -13,6 +13,11 @@ build-type:          Simple
 cabal-version:       >=1.10
 tested-with:         GHC == 8.4.1
 
+Flag debug
+  Description: Enable debug io
+  Default:     False
+  Manual:      True
+
 library
   hs-source-dirs:      src
   exposed-modules:     Glazier.Command
@@ -20,6 +25,8 @@ library
                        Glazier.Command.Internal
                        Glazier.Benign
                        Glazier.Benign.Internal
+                       Glazier.DebugIO
+                       Glazier.Logger
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 1.0
                      , data-diverse >= 4.6
@@ -27,13 +34,17 @@ library
                      , dlist >= 0.8
                      , lens >= 4.14
                      , mtl >= 2.2
+                     , mmorph >= 1.0
                      , stm >= 2.4
                      , tagged >= 0.8
+                     , text >= 1.2
                      , transformers >= 0.3
                      , unliftio >= 0.2
                      , unliftio-core >= 0.1
   ghc-options:        -Wall -Wredundant-constraints
   default-language:    Haskell2010
+  if flag(Debug)
+    cpp-options:     -DDEBUGIO
 
 test-suite glazier-test
   type:                exitcode-stdio-1.0
@@ -54,6 +65,8 @@ test-suite glazier-test
                      , unliftio-core >= 0.1
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall
   default-language:    Haskell2010
+  if flag(Debug)
+    cpp-options:     -DDEBUGIO
 
 source-repository head
   type:     git

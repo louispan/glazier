@@ -11,8 +11,9 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Command
@@ -33,6 +34,7 @@ module Glazier.Command
     , eval_
     , eval
     , eval'
+    , eval''
     , sequentially
     , concurringly
     , concurringly_
@@ -49,6 +51,7 @@ import Control.Concurrent
 import Control.Lens
 import Control.Monad.Cont
 import Control.Monad.Delegate
+import Control.Monad.Morph
 import Control.Monad.Reader
 import Control.Monad.Trans.Cont
 import Control.Monad.Trans.Except
@@ -69,8 +72,9 @@ import Data.Semigroup
 -- Command utilties
 ----------------------------------------------
 
--- | Converts a handler that result in 'MonadProgram' of a list of commands
+-- | Converts a handler that result in 'MonadProgram'
 -- to a handler that result in a list of commands, using the current monad context.
+-- This is used to extract out the commands in a 'MonadProgram'.
 class Monad m => MonadCodify c m | m -> c where
     codifies :: (a -> m ()) -> m (a -> [c])
 
@@ -91,10 +95,12 @@ codify' m = do
     pure (f ())
 
 newtype ProgramT c m a = ProgramT { runProgramT :: Strict.StateT (DL.DList c) m a }
-    deriving (Functor, Applicative, Monad, MonadTrans)
+    deriving (Functor, Applicative, Monad, MonadTrans, MFunctor)
 
 type Program c = ProgramT c Identity
 
+-- | Monad that can be added instructions of commands.
+-- To extract the command see 'MonadCodify'
 class Monad m => MonadProgram c m | m -> c where
     -- | Add a command to the list of commands.
     instruct :: c -> m ()
@@ -225,7 +231,10 @@ exec = instruct . command
 exec' :: (MonadProgram c m, AsFacet (cmd c) c) => cmd c -> m ()
 exec' = instruct . command'
 
--- | This converts a monadic function that requires a handler for @a@ into
+
+-- | Uses 'delegate' and 'codify' together.
+--
+-- This converts a monadic function that requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
 -- 'eval_' is used inside an 'evalContT' block or 'concurringly'.
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
@@ -251,6 +260,16 @@ eval_ m = delegate $ \k -> do
 
 -- | This is useful for converting a command that needs a handler for @a@
 -- into a monad that fires @a@
+eval ::
+    ( MonadCommand c m
+    , AsFacet [c] c
+    , AsFacet cmd c
+    )
+    => ((a -> c) -> cmd) -> m a
+eval k = eval_ $ exec . k
+
+-- | This is useful for converting a command that needs a handler for @a@
+-- into a monad that fires @a@
 eval' ::
     ( MonadCommand c m
     , AsFacet [c] c
@@ -259,15 +278,15 @@ eval' ::
     => ((a -> c) -> cmd c) -> m a
 eval' k = eval_ $ exec' . k
 
--- | This is useful for converting a command that needs a handler for @a@
--- into a monad that fires @a@
-eval ::
+-- | This is useful for converting a command fires a into a monad that fires @a@
+eval'' ::
     ( MonadCommand c m
     , AsFacet [c] c
-    , AsFacet cmd c
+    , AsFacet (cmd c) c
+    , Functor cmd
     )
-    => ((a -> c) -> cmd) -> m a
-eval k = eval_ $ exec . k
+    => cmd a -> m a
+eval'' c = eval' (<$> c)
 
 -- | Adds a 'MonadCont' constraint. It is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack,
