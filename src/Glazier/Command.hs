@@ -32,7 +32,7 @@ module Glazier.Command
     , delegate
     , eval
     , eval'
-    , reval
+    , invoke
     , sequentially
     , concurringly
     , concurringly_
