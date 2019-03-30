@@ -46,7 +46,7 @@ debugIO :: (HasCallStack, MonadCommand c m, AsLogger c, AsDebugIO c) => IO a -> 
 #ifdef DEBUGIO
 debugIO m = logInvoke Trace callStack $ DebugIO m
 #else
-debugIO _ = pure ()
+debugIO _ = finish (pure ())
 #endif
 
 -- -- | Variation of 'debugIO' where the IO action returns
