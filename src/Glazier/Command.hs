@@ -29,10 +29,10 @@ module Glazier.Command
     , commands
     , exec
     , exec'
-    , eval_
+    , delegate
     , eval
     , eval'
-    , eval''
+    , reval
     , sequentially
     , concurringly
     , concurringly_
@@ -48,8 +48,8 @@ import Control.Applicative
 import Control.Concurrent
 import Control.Lens
 import Control.Monad.Cont
-import Control.Monad.Delegate
-import Control.Monad.Morph
+import Control.Monad.Defer
+import Control.Monad.Morph  
 import Control.Monad.Reader
 import Control.Monad.Trans.Cont
 import Control.Monad.Trans.Except
@@ -175,10 +175,10 @@ instance MonadProgram c m => MonadProgram c (MaybeT m) where
     instruct = lift . instruct
     -- instructs = lift . instructs
 
--- | Passthrough instance which requires the inner monad to be a 'MonadDelegate'.
--- This means that the @Left e@ case can be handled by the provided delegate.
-instance (MonadDelegate () m, MonadCodify c m) => MonadCodify c (ExceptT e m) where
-    codify f = ExceptT $ delegate $ \kec -> do
+-- | Passthrough instance which requires the inner monad to be a 'MonadDefer'.
+-- This means that the @Left e@ case can be handled by the provided defer.
+instance (MonadDefer () m, MonadCodify c m) => MonadCodify c (ExceptT e m) where
+    codify f = ExceptT $ defer $ \kec -> do
         let g a = do
                 e <- runExceptT $ f a
                 case e of
@@ -189,16 +189,21 @@ instance (MonadDelegate () m, MonadCodify c m) => MonadCodify c (ExceptT e m) wh
 
 instance MonadProgram c m => MonadProgram c (ExceptT e m) where
     instruct = lift . instruct
-    -- instructs = lift . instructs
 
 type MonadCommand c m =
     ( MonadProgram c m
-    , MonadDelegate () m
+    , MonadDefer () m
     , MonadCodify c m
     -- , AsFacet [c] c
     )
 
 -- | @'exec' = 'instruct' . 'command'@
+--
+-- 'exec', 'exec'', 'delegate', 'eval', 'eval'', 'eval'''
+-- can be used inside an 'evalContT' or 'concurringly'.
+-- If it is inside a 'evalContT' then the command is evaluated sequentially.
+-- If it is inside a 'concurringly', then the command is evaluated concurrently
+-- with other commands.
 exec :: (MonadProgram c m, AsFacet cmd c) => cmd -> m ()
 exec = instruct . command
 
@@ -206,58 +211,49 @@ exec = instruct . command
 exec' :: (MonadProgram c m, AsFacet (cmd c) c) => cmd c -> m ()
 exec' = instruct . command'
 
-
--- | Uses 'delegate' and 'codify' together.
+-- | Uses 'defer' and 'codify' together.
+-- Uses 'defer' to get the @a -> m()@ handler
+-- and 'codify' to convert the handler to a command form @a -> c@.
+-- which is the pass to a block of code to a convert a monad that fires an @a@.
 --
--- This converts a monadic function that requires a handler for @a@ into
+-- That is, this converts a function that returns a monad and requires a handler for @a@ into
 -- a monad that fires the @a@ so that the do notation can be used to compose the handler.
--- 'eval_' is used inside an 'evalContT' block or 'concurringly'.
--- If it is inside a 'evalContT' then the command is evaluated sequentially.
--- If it is inside a 'concurringly', then the command is evaluated concurrently
--- with other commands.
---
 -- @
--- If tne input function purely returns a command, you can use:
--- eval_ . (exec' .) :: ((a -> c) -> cmd c) -> m a
---
--- If tne input function monnadic returns a command, you can use:
--- eval_ . ((>>= exec') .) :: ((a -> c) -> m (cmd c)) -> m a
--- @
-eval_ ::
-    ( MonadDelegate () m
+delegate ::
+    ( MonadDefer () m
     , MonadCodify c m
     )
     => ((a -> c) -> m ()) -> m a
-eval_ m = delegate $ \k -> do
+delegate m = defer $ \k -> do
     f <- codify k
     m f
 
--- | This is useful for converting a command that needs a handler for @a@
--- into a monad that fires @a@
+-- | Convert a command that needs a handler for @a@
+-- into a `MonadCommand` that fires @a@
 eval ::
     ( MonadCommand c m
     , AsFacet cmd c
     )
     => ((a -> c) -> cmd) -> m a
-eval k = eval_ $ exec . k
+eval k = delegate $ exec . k
 
--- | This is useful for converting a command that needs a handler for @a@
--- into a monad that fires @a@
+-- | Convert a command that needs a handler for @a@
+-- into a `MonadCommand` that fires @a@
 eval' ::
     ( MonadCommand c m
     , AsFacet (cmd c) c
     )
     => ((a -> c) -> cmd c) -> m a
-eval' k = eval_ $ exec' . k
+eval' k = delegate $ exec' . k
 
--- | This is useful for converting a command fires a into a monad that fires @a@
-eval'' ::
+-- | Convert a functor into a 'MonadCommand' that fires an @a@
+invoke ::
     ( MonadCommand c m
     , AsFacet (cmd c) c
     , Functor cmd
     )
     => cmd a -> m a
-eval'' c = eval' (<$> c)
+invoke c = eval' (<$> c)
 
 -- | Adds a 'MonadCont' constraint. It is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack,
@@ -301,7 +297,7 @@ concurringly ::
     ( MonadCommand c m
     , AsConcur c
     ) => Concur c a -> m a
-concurringly c = eval_ m
+concurringly c = delegate m
   where
     m f = exec' $ f <$> c
 
@@ -355,8 +351,8 @@ instance AsConcur c => MonadProgram c (Concur c) where
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
 -- The Concur monad allows scheduling the command in concurrently with other commands.
-instance AsConcur c => MonadDelegate () (Concur c) where
-    delegate f = Concur $ do
+instance AsConcur c => MonadDefer () (Concur c) where
+    defer f = Concur $ do
         v <- lift $ NewEmptyMVar newEmptyMVar
         b <- runConcur $ f (\a -> Concur $ lift $ pure $ Left $ putMVar v a)
         pure $ Left (either id pure b *> takeMVar v)

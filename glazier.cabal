@@ -28,7 +28,7 @@ library
                        Glazier.DebugIO
                        Glazier.Logger
   build-depends:       base >= 4.7 && < 5
-                     , alternators >= 1.0
+                     , alternators >= 2.0
                      , data-diverse >= 4.6
                      , data-diverse-lens >= 4.3
                      , dlist >= 0.8

@@ -75,12 +75,12 @@ logExec' lvl cs c = do
 
 logEval :: (Show cmd, AsFacet cmd c, MonadCommand c m, AsLogger c)
     => LogLevel -> CallStack -> ((a -> c) -> cmd) -> m a
-logEval lvl cs k = eval_ $ logExec lvl cs . k
+logEval lvl cs k = delegate $ logExec lvl cs . k
 
 logEval' :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, AsLogger c)
     => LogLevel -> CallStack -> ((a -> c) -> cmd c) -> m a
-logEval' lvl cs k = eval_ $ logExec' lvl cs . k
+logEval' lvl cs k = delegate $ logExec' lvl cs . k
 
-logEval'' :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, AsLogger c, Functor cmd)
+logInvoke :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, AsLogger c, Functor cmd)
     => LogLevel -> CallStack -> cmd a -> m a
-logEval'' lvl cs c = logEval' lvl cs (<$> c)
+logInvoke lvl cs c = logEval' lvl cs (<$> c)

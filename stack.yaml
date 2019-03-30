@@ -44,7 +44,7 @@ extra-deps:
 # - git: git@github.com:ghcjs/ghcjs-base.git
 #   commit: b4a8d578758613e5c7db88891f444ff5e6f3edb9
 - aeson-1.1.2.0
-- alternators-1.0.0.0
+# - alternators-1.0.0.0
 - data-diverse-4.6.0.0
 - data-diverse-lens-4.3.0.0
 - async-2.2.1
@@ -52,6 +52,7 @@ extra-deps:
 - newtype-generics-0.5.3
 - unliftio-0.2.7.0
 - unliftio-core-0.1.1.0
+- '/Users/louis/repo/hs/alternators'
 
 # Override default flag values for local packages and extra-deps
 flags: {}
