@@ -24,9 +24,12 @@ library
                        Glazier.Command.Exec
                        Glazier.Command.Internal
                        Glazier.Benign
+                       Glazier.Benign.Exec
                        Glazier.Benign.Internal
                        Glazier.DebugIO
+                       Glazier.DebugIO.Exec
                        Glazier.Logger
+                       Glazier.Logger.Exec
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 2.0
                      , data-diverse >= 4.6
@@ -38,9 +41,11 @@ library
                      , stm >= 2.4
                      , tagged >= 0.8
                      , text >= 1.2
+                     , time >= 1.6
                      , transformers >= 0.3
                      , unliftio >= 0.2
                      , unliftio-core >= 0.1
+                     , unordered-containers >= 0.2.8
   ghc-options:        -Wall -Wredundant-constraints
   default-language:    Haskell2010
   if flag(Debug)

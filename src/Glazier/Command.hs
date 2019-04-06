@@ -49,7 +49,7 @@ import Control.Concurrent
 import Control.Lens
 import Control.Monad.Cont
 import Control.Monad.Defer
-import Control.Monad.Morph  
+import Control.Monad.Morph
 import Control.Monad.Reader
 import Control.Monad.Trans.Cont
 import Control.Monad.Trans.Except

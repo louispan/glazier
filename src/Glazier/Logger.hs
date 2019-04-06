@@ -1,86 +1,93 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Glazier.Logger where
 
+import Data.Maybe
 import Data.Diverse.Lens
+import Data.Semigroup
 import GHC.Stack
 import Glazier.Benign
 import Glazier.Command
 import qualified Data.Text.Lazy as TL
 
-type AsLogger c =
-    ( AsFacet [c] c -- implicity required by 'MonadCodify'
-    , AsFacet Logger c
-    )
+-- Modified from GHC.Stack to be shorter, to use TL.Text
+-- and to operate on [(String, SrcLoc)]
+prettyCallStack' :: CallStack -> TL.Text
+prettyCallStack' = TL.intercalate "\n " . fmap prettyCallSite' . getCallStack
+  where
+    prettyCallSite' :: (String, SrcLoc) -> TL.Text
+    prettyCallSite' (f, loc) = TL.pack f <> "@" <> prettySrcLoc' loc
 
-instance Show Logger where
-    showsPrec p (Logger lvl stk _) = showParen (p >= 11) $
-        showString "Logger " . shows lvl . showString " at " . showString (prettyCallStack stk)
+    prettySrcLoc' :: SrcLoc -> TL.Text
+    prettySrcLoc' SrcLoc {..}
+        = foldr (<>) ""
+            [ TL.pack srcLocModule
+            , ":"
+            , TL.pack $ show srcLocStartLine
+            , ":"
+            , TL.pack $ show srcLocStartCol
+            ]
+
+callStackTop :: CallStack -> Maybe (String, SrcLoc)
+callStackTop = listToMaybe . getCallStack
+
+type Logger c m = (AsFacet LogLine c, MonadLogLevel m)
+
+instance Show LogLine where
+    showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
+        showString "LogLine " . shows lvl . showString " at " . showString (TL.unpack $ prettyCallStack' cs)
 
 data LogLevel
-    -- console.info
-    = Trace
-    -- console.info
-    | Debug
-    -- console.info
-    | Info
-    -- console.warn
-    | Warn
-    -- console.error, will also print callstack
-    | Error
+    = TRACE
+    | DEBUG
+    | INFO_
+    | WARN_
+    -- will also print callstack
+    | ERROR
     deriving (Eq, Show, Read, Ord)
 
-data Logger = Logger LogLevel CallStack (Benign IO TL.Text)
+data LogLine = LogLine (Benign IO (Maybe LogLevel)) LogLevel CallStack (Benign IO TL.Text)
 
--- | @console.error("ERROR " + msg + "[function@path/to/src.hs:line:col in package:Module.Name]")
--- Will print the full callstack, not just the first level.
-log_ :: (MonadCommand c m, AsLogger c) => LogLevel -> CallStack -> Benign IO TL.Text -> m ()
-log_ lvl cs m = exec $ Logger lvl cs m
+class Monad m => MonadLogLevel m where
+    logLevel :: m (Benign IO (Maybe LogLevel))
 
--- -- | @console.info("TRACE " + msg + "[function@path/to/src.hs:line:col in package:Module.Name]")
--- -- NB. Reactor commands are automatically logged at trace level.
--- logTrace :: (MonadCommand c m, AsLogger c) => LogLevel -> CallStack -> Benign IO TL.Text -> m ()
--- logTrace = log_ Trace
+newtype LoggerT m a = LoggerT { runLoggerT :: Benign IO (Maybe LogLevel) -> m a }
+    deriving Functor
+    deriving Applicative via (ReaderT (Benign IO (Maybe LogLevel)))
 
--- -- | @console.info("DEBUG " + msg + "[function@path/to/src.hs:line:col in package:Module.Name]")
--- logDebug :: (MonadCommand c m, AsLogger c) => LogLevel -> CallStack -> Benign IO TL.Text -> m ()
--- logDebug = log_ Debug
+logLine :: (MonadCommand c m, Logger c m)
+    => LogLevel -> CallStack -> Benign IO TL.Text
+    -> m ()
+logLine lvl cs m = do
+    lvl' <- logLevel
+    exec $ LogLine lvl' lvl cs m
 
--- -- | @console.info("INFO  " + msg + "[function@path/to/src.hs:line:col in package:Module.Name]")
--- logInfo :: (MonadCommand c m, AsLogger c) => LogLevel -> CallStack -> Benign IO TL.Text -> m ()
--- logInfo = log_ Info
-
--- -- | @console.warn("WARN  " + msg + "[function@path/to/src.hs:line:col in package:Module.Name]")
--- logWarn :: (MonadCommand c m, AsLogger c) => LogLevel -> CallStack -> Benign IO TL.Text -> m ()
--- logWarn = log_ Warn
-
--- -- | @console.error("ERROR " + msg + "[function@path/to/src.hs:line:col in package:Module.Name]")
--- -- Will print the full callstack, not just the first level.
--- logError :: (MonadCommand c m, AsLogger c) => LogLevel -> CallStack -> Benign IO TL.Text -> m ()
--- logError = log_ Error
-
-logExec :: (Show cmd, AsFacet cmd c, MonadCommand c m, AsLogger c)
+logExec :: (Show cmd, AsFacet cmd c, MonadCommand c m, Logger c m)
     => LogLevel -> CallStack -> cmd -> m ()
 logExec lvl cs c = do
-    log_ lvl cs (pure . TL.pack $ show c)
+    logLine lvl cs (pure . TL.pack $ show c)
     exec c
 
-logExec' :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, AsLogger c)
+logExec' :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, Logger c m)
     => LogLevel -> CallStack -> cmd c -> m ()
 logExec' lvl cs c = do
-    log_ lvl cs (pure . TL.pack $ show c)
+    logLine lvl cs (pure . TL.pack $ show c)
     exec' c
 
-logEval :: (Show cmd, AsFacet cmd c, MonadCommand c m, AsLogger c)
+logEval :: (Show cmd, AsFacet cmd c, MonadCommand c m, Logger c m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd) -> m a
 logEval lvl cs k = delegate $ logExec lvl cs . k
 
-logEval' :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, AsLogger c)
+logEval' :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, Logger c m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd c) -> m a
 logEval' lvl cs k = delegate $ logExec' lvl cs . k
 
-logInvoke :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, AsLogger c, Functor cmd)
+logInvoke :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, Logger c m, Functor cmd)
     => LogLevel -> CallStack -> cmd a -> m a
 logInvoke lvl cs c = logEval' lvl cs (<$> c)

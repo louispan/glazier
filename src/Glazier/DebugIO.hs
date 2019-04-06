@@ -10,17 +10,12 @@ module Glazier.DebugIO where
 
 #ifdef DEBUGIO
 
--- import Control.Monad
-import Control.Monad.Defer
 import Data.Diverse.Lens
 import GHC.Stack
 import Glazier.Command
 import Glazier.Logger
 
-type AsDebugIO c =
-    ( AsFacet [c] c -- implicity required by 'MonadCodify'
-    , AsFacet (DebugIO c) c
-    )
+type AsDebugIO c = AsFacet (DebugIO c) c
 
 instance Show (DebugIO c) where
     showsPrec _ (DebugIO _ ) = showString "DebugIO"
@@ -42,9 +37,9 @@ newtype DebugIO c = DebugIO (IO c)
 
 -- | Run an arbitrary IO. This should only be used for testing.
 -- If DEBUGIO is not defined, then this does nothing.
-debugIO :: (HasCallStack, MonadCommand c m, AsLogger c, AsDebugIO c) => IO a -> m a
+debugIO :: (HasCallStack, MonadCommand c m, Logger c m, AsDebugIO c) => IO a -> m a
 #ifdef DEBUGIO
-debugIO m = logInvoke Trace callStack $ DebugIO m
+debugIO m = logInvoke TRACE callStack $ DebugIO m
 #else
 debugIO _ = finish (pure ())
 #endif

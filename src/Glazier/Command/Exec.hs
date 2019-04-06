@@ -113,3 +113,6 @@ execConcur executor (Concur m) = do
         -- run the batched commands in separate threads
         traverse_ (void . U.forkIO . executor') (DL.toList cs)
         pure ma
+
+execIO :: MonadIO m => (c -> m ()) -> IO c -> m ()
+execIO executor m = liftIO m >>= executor
