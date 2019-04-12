@@ -12,7 +12,6 @@ module Glazier.DebugIO where
 
 import Data.Diverse.Lens
 import GHC.Stack
-import Glazier.Command
 import Glazier.Logger
 
 type AsDebugIO c = AsFacet (DebugIO c) c
@@ -23,7 +22,6 @@ instance Show (DebugIO c) where
 -- | run arbitrary IO, should only be used for debugging
 newtype DebugIO c = DebugIO (IO c)
     deriving (Functor, Applicative, Monad)
-
 
 -- -- | Variation of 'debugIO_' where the IO action returns
 -- -- the next command to process
@@ -37,7 +35,7 @@ newtype DebugIO c = DebugIO (IO c)
 
 -- | Run an arbitrary IO. This should only be used for testing.
 -- If DEBUGIO is not defined, then this does nothing.
-debugIO :: (HasCallStack, MonadCommand c m, Logger c m, AsDebugIO c) => IO a -> m a
+debugIO :: (HasCallStack, AsDebugIO c, Logger c r m) => IO a -> m a
 #ifdef DEBUGIO
 debugIO m = logInvoke TRACE callStack $ DebugIO m
 #else

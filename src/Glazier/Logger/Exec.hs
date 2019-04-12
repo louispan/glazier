@@ -7,10 +7,10 @@ import Control.Monad.Trans
 import Control.Monad.Trans.Maybe
 import Data.Semigroup
 import qualified Data.Text.Lazy as TL
+import Data.Time
 import GHC.Stack
 import Glazier.Benign.Internal
 import Glazier.Logger
-import Data.Time
 
 execLogger :: LogLine
     -> Benign IO (Maybe (LogLevel, CallStack, TL.Text))
