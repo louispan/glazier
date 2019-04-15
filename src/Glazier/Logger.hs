@@ -39,7 +39,7 @@ prettyCallStack' = TL.intercalate "\n " . fmap prettyCallSite' . getCallStack
 callStackTop :: CallStack -> Maybe (String, SrcLoc)
 callStackTop = listToMaybe . getCallStack
 
-type Logger c r m = (AsFacet LogLine c, MonadCommand c m, MonadReader r m, Has (Benign IO (Maybe LogLevel)) r)
+type Logger r c m = (AsFacet LogLine c, MonadCommand c m, MonadReader r m, Has (Benign IO (Maybe LogLevel)) r)
 
 instance Show LogLine where
     showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
@@ -59,33 +59,33 @@ data LogLine = LogLine (Benign IO (Maybe LogLevel)) LogLevel CallStack (Benign I
 _logLevel :: Has (Benign IO (Maybe LogLevel)) s => Lens' s (Benign IO (Maybe LogLevel))
 _logLevel = hasLens @(Benign IO (Maybe LogLevel))
 
-logLine :: (Logger c r m)
+logLine :: (Logger r c m)
     => LogLevel -> CallStack -> Benign IO TL.Text
     -> m ()
 logLine lvl cs m = do
     lvl' <- view _logLevel
     exec $ LogLine lvl' lvl cs m
 
-logExec :: (Show cmd, AsFacet cmd c, Logger c r m)
+logExec :: (Show cmd, AsFacet cmd c, Logger r c m)
     => LogLevel -> CallStack -> cmd -> m ()
 logExec lvl cs c = do
     logLine lvl cs (pure . TL.pack $ show c)
     exec c
 
-logExec' :: (Show (cmd c), AsFacet (cmd c) c, Logger c r m)
+logExec' :: (Show (cmd c), AsFacet (cmd c) c, Logger r c m)
     => LogLevel -> CallStack -> cmd c -> m ()
 logExec' lvl cs c = do
     logLine lvl cs (pure . TL.pack $ show c)
     exec' c
 
-logEval :: (Show cmd, AsFacet cmd c, Logger c r m)
+logEval :: (Show cmd, AsFacet cmd c, Logger r c m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd) -> m a
 logEval lvl cs k = delegatify $ logExec lvl cs . k
 
-logEval' :: (Show (cmd c), AsFacet (cmd c) c, Logger c r m)
+logEval' :: (Show (cmd c), AsFacet (cmd c) c, Logger r c m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd c) -> m a
 logEval' lvl cs k = delegatify $ logExec' lvl cs . k
 
-logInvoke :: (Show (cmd c), AsFacet (cmd c) c, Functor cmd, Logger c r m)
+logInvoke :: (Show (cmd c), AsFacet (cmd c) c, Functor cmd, Logger r c m)
     => LogLevel -> CallStack -> cmd a -> m a
 logInvoke lvl cs c = logEval' lvl cs (<$> c)

@@ -123,7 +123,7 @@ codify' m = do
 -- 'Concur' has a instance of 'MonadDelegate' which allows concurrent evaluation of
 -- commands with return values to handle.
 newtype ProgramT c m a = ProgramT { runProgramT :: Strict.StateT (DL.DList c) m a }
-    deriving (Functor, Applicative, Monad, MonadTrans, MFunctor)
+    deriving (Functor, Applicative, Monad, MonadTrans, MFunctor, MonadIO)
 
 type Program c = ProgramT c Identity
 

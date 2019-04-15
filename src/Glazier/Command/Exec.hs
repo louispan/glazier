@@ -38,64 +38,65 @@ instance (AsFacet a (Which (CmdTypes (NoIOCmd c) (NoIOCmd c)))) => AsFacet a (No
     facet = iso unNoIOCmd NoIOCmd . facet
 
 -- | Create an executor for a variant in the command type.
--- returns a 'Proxy' to keep track of the the types handled by the executor.
-maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> c -> MaybeT m (Proxy '[a], b)
-maybeExec k c = MaybeT . sequenceA $ (fmap (\b -> (Proxy, b)) . k) <$> preview facet c
+-- returns a tuple with a 'Proxy' to keep track of the the types handled by the executor.
+maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> (Proxy [a], c -> MaybeT m b)
+maybeExec k = (Proxy, \c -> MaybeT . sequenceA $ (k <$> preview facet c))
+
+-- | Combines executors, keeping track of the combined list of types handled.
+-- redundant-constraints: used to constrain a''
+orExec :: Alternative m => (Proxy a, m b) -> (Proxy a', m b) -> (Proxy (Append a a'), m b)
+orExec (_, m) (_, n) = (Proxy, m <|> n)
+infixl 3 `orExec` -- like <|>
 
 -- | Tie an executor with itself to get the final interpreter
-fixExec :: Functor m => ((c -> m ()) -> c -> MaybeT m (Proxy cs, ())) -> c -> m (Proxy cs, ())
-fixExec fexec = (`evalMaybeT` (Proxy, ())) . fexec (fmap snd . fixExec fexec)
+fixExec :: Functor m => ((c -> m ()) -> c -> MaybeT m ()) -> c -> m ()
+fixExec fexec = (`evalMaybeT` ()) . fexec (fixExec fexec)
 
 -- | A variation of 'fixExec' for executors that return cmds that should be evaluated last
-fixExec' :: Monad m => ((c -> m ()) -> c -> MaybeT m (Proxy cs, [c])) -> c -> m (Proxy cs, ())
+fixExec' :: Monad m => ((c -> m ()) -> c -> MaybeT m [c]) -> c -> m ()
 fixExec' fexec c = do
-    let go = (`evalMaybeT` []) . fmap snd . fexec (fmap snd . fixExec' fexec)
-        gos cs = do
+    let execCmd = (`evalMaybeT` []) . fexec (fixExec' fexec) -- c -> MaybeT m [c]
+        execCmds cs = do -- [c] -> MaybeT m ()
             case cs of
-                [] -> pure ()
+                [] -> pure () -- no more extra commands to process, break out of loop
                 cs' -> do
-                    cs'' <- (DL.concat . (fmap DL.fromList)) <$> traverse go cs'
-                    gos $ DL.toList cs''
-    cs <- go c
-    gos cs
-    pure (Proxy, ())
+                    -- process the extra commands, and get extra commands to process
+                    cs'' <- (DL.concat . (fmap DL.fromList)) <$> traverse execCmd cs'
+                    -- recusrively process the extra commands
+                    execCmds $ DL.toList cs''
+    cs <- execCmd c
+    execCmds cs
 
-
--- | Use this function to verify at compile time that the given executor will fullfill
+-- | Use this function to verify at compile time that the given executor's Proxy will fullfill
 -- all the variant types in a command type.
+-- THe types in the command does not have to be in the same order as the types in the Proxy.
+-- There can't be any extra types in ys or xs.
 -- redundant-constraints: used to constrain xs and ys
 verifyExec ::
-    ( AppendUnique '[] ys ~ ys
-    , AppendUnique xs ys ~ xs
-    , AppendUnique ys xs ~ ys
-    , Functor m
+    ( AppendUnique '[] ys ~ ys -- no duplicate types in ys
+    , AppendUnique xs ys ~ xs -- no extra types in ys
+    , AppendUnique ys xs ~ ys -- no no extra types in xs
     )
-    => (c -> Which xs) -> (c -> m (Proxy ys, b)) -> (c -> m b)
-verifyExec _ g = fmap snd .  g
+    => (c -> Which xs) -> (Proxy ys, a) -> a
+verifyExec _commandToTypes (_typesOfExecutor, a) = a
 
 -- 'verifyExec' and 'fixExec' an executor.
-verifyAndFixExec ::
+fixVerifyExec ::
     ( AppendUnique '[] ys ~ ys
     , AppendUnique xs ys ~ xs
     , AppendUnique ys xs ~ ys
     , Functor m
-    ) => (c -> Which xs) -> ((c -> m ()) -> c -> MaybeT m (Proxy ys, ())) -> c -> m ()
-verifyAndFixExec unCmd maybeExecuteCmd = verifyExec unCmd (fixExec maybeExecuteCmd)
+    ) => (c -> Which xs) -> ((c -> m ()) -> (Proxy ys, c -> MaybeT m ())) -> c -> m ()
+fixVerifyExec unCmd maybeExecuteCmd = fixExec (verifyExec unCmd . maybeExecuteCmd)
 
 -- 'verifyExec' and 'fixExec'' an executor.
-verifyAndFixExec' ::
+fixVerifyExec' ::
     ( AppendUnique '[] ys ~ ys
     , AppendUnique xs ys ~ xs
     , AppendUnique ys xs ~ ys
     , Monad m
-    ) => (c -> Which xs) -> ((c -> m ()) -> c -> MaybeT m (Proxy ys, [c])) -> c -> m ()
-verifyAndFixExec' unCmd maybeExecuteCmd = verifyExec unCmd (fixExec' maybeExecuteCmd)
-
--- | Combines executors, keeping track of the combined list of types handled.
--- redundant-constraints: used to constrain a''
-orMaybeExec :: (Monad m, a'' ~ Append a a') => MaybeT m (Proxy a, b) -> MaybeT m (Proxy a', b) -> MaybeT m (Proxy a'', b)
-orMaybeExec m n = (\b -> (Proxy, b)) <$> ((snd <$> m) <|> (snd <$> n))
-infixl 3 `orMaybeExec` -- like <|>
+    ) => (c -> Which xs) -> ((c -> m ()) -> (Proxy ys, c -> MaybeT m [c])) -> c -> m ()
+fixVerifyExec' unCmd maybeExecuteCmd = fixExec' (verifyExec unCmd . maybeExecuteCmd)
 
 execConcur ::
     MonadUnliftIO m
