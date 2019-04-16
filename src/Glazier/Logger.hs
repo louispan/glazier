@@ -8,8 +8,6 @@
 
 module Glazier.Logger where
 
-import Control.Lens
-import Control.Monad.Reader
 import Data.Diverse.Lens
 import Data.Maybe
 import Data.Semigroup
@@ -39,7 +37,10 @@ prettyCallStack' = TL.intercalate "\n " . fmap prettyCallSite' . getCallStack
 callStackTop :: CallStack -> Maybe (String, SrcLoc)
 callStackTop = listToMaybe . getCallStack
 
-type Logger r c m = (AsFacet LogLine c, MonadCommand c m, MonadReader r m, Has (Benign IO (Maybe LogLevel)) r)
+class Monad m => MonadLogLevel m where
+    logLevel :: m (Benign IO (Maybe LogLevel))
+
+type Logger c m = (AsFacet LogLine c, MonadCommand c m, MonadLogLevel m)
 
 instance Show LogLine where
     showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
@@ -56,36 +57,33 @@ data LogLevel
 
 data LogLine = LogLine (Benign IO (Maybe LogLevel)) LogLevel CallStack (Benign IO TL.Text)
 
-_logLevel :: Has (Benign IO (Maybe LogLevel)) s => Lens' s (Benign IO (Maybe LogLevel))
-_logLevel = hasLens @(Benign IO (Maybe LogLevel))
-
-logLine :: (Logger r c m)
+logLine :: (Logger c m)
     => LogLevel -> CallStack -> Benign IO TL.Text
     -> m ()
 logLine lvl cs m = do
-    lvl' <- view _logLevel
+    lvl' <- logLevel
     exec $ LogLine lvl' lvl cs m
 
-logExec :: (Show cmd, AsFacet cmd c, Logger r c m)
+logExec :: (Show cmd, AsFacet cmd c, Logger c m)
     => LogLevel -> CallStack -> cmd -> m ()
 logExec lvl cs c = do
     logLine lvl cs (pure . TL.pack $ show c)
     exec c
 
-logExec' :: (Show (cmd c), AsFacet (cmd c) c, Logger r c m)
+logExec' :: (Show (cmd c), AsFacet (cmd c) c, Logger c m)
     => LogLevel -> CallStack -> cmd c -> m ()
 logExec' lvl cs c = do
     logLine lvl cs (pure . TL.pack $ show c)
     exec' c
 
-logEval :: (Show cmd, AsFacet cmd c, Logger r c m)
+logEval :: (Show cmd, AsFacet cmd c, Logger c m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd) -> m a
 logEval lvl cs k = delegatify $ logExec lvl cs . k
 
-logEval' :: (Show (cmd c), AsFacet (cmd c) c, Logger r c m)
+logEval' :: (Show (cmd c), AsFacet (cmd c) c, Logger c m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd c) -> m a
 logEval' lvl cs k = delegatify $ logExec' lvl cs . k
 
-logInvoke :: (Show (cmd c), AsFacet (cmd c) c, Functor cmd, Logger r c m)
+logInvoke :: (Show (cmd c), AsFacet (cmd c) c, Functor cmd, Logger c m)
     => LogLevel -> CallStack -> cmd a -> m a
 logInvoke lvl cs c = logEval' lvl cs (<$> c)
