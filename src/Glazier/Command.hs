@@ -41,10 +41,11 @@ module Glazier.Command
     , concurringly_
     , AsConcur
     , Concur(..)
-    , NewEmptyMVar
-    -- | NB. Don't export NewEmptyMVar constructor to guarantee
+    , NewChanIO
+    -- | NB. Don't export NewChanIO constructor to guarantee
     -- that that it only contains non-blocking 'newEmptyMVar' IO.
-    , unNewEmptyMVar
+    , newChanIO
+    , unNewChanIO
     ) where
 
 import Control.Also
@@ -87,9 +88,10 @@ command = review facet
 command' :: (AsFacet (cmd c) c) => cmd c -> c
 command' = review facet
 
--- | A variation of 'command' specific for unit that uses a
+-- | This function is useful for 'fmap' a @cmd ()@ into @cmd c@.
+-- A variation of 'command' specific for unit that uses a
 -- @AsFacet [c] c@ constraint instead of
--- @AsFacet () c@ to avoid poluting the contstraints
+-- @AsFacet () c@ to avoid polluting the contstraints
 -- when 'commands' is used.
 command_ :: (AsFacet [c] c) => () -> c
 command_ = command' . \() -> []
@@ -346,14 +348,18 @@ type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
 newtype Concur c a = Concur
-    -- The base IO doesn't block (only does newEmptyMVar), but may return an IO that blocks.
+    -- The base IO doesn't block (only does newChan), but may return an IO that blocks.
     -- The return is @Either (IO a) a@ where 'Left' is used for blocking IO
-    -- and 'Right' is used for nonblocking pure values.
-    -- This distinction prevents nested layers of MVar for pure monadic binds.
+    -- that could potentially fail with BlockedIndefinitelyOnMVar.
+    -- Tje 'Right' is used for nonblocking pure values.
+    -- This distinction prevents nested layers of Chan for monadic binds with pure Right values.
     -- See the instance of 'Monad' for 'Concur'.
-    -- Once a blocking IO is returned, then all subsequent binds require another nested MVar.
+    -- Once a Left blocking IO is returned, then all subsequent binds require another nested MVar.
     -- So it is more efficient to groups of pure binds first before binding with blocking code.
-    { runConcur :: Strict.StateT (DL.DList c) NewEmptyMVar (Either (IO a) a)
+    -- The interpreter 'Glazier.Command.Exec.execConcur' will run any Left IO action
+    -- until failure with BlockedIndefinitelyOnMVar to drain all the values from the Chan.
+    -- DNAGER: So do not put anything in Left IO that will never eventually fail!
+    { runConcur :: Strict.StateT (DL.DList c) NewChanIO (Either (IO a) a)
     } deriving (G.Generic)
 
 instance Show (Concur c a) where
@@ -395,17 +401,31 @@ instance (AsConcur c) => Monad (Concur c) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
         case m' of
-            -- pure value, no blocking required, avoid using MVar.
+            -- pure value, no blocking required, avoid using Chan.
             Right a -> runConcur $ k a
-            -- blocking io, must use MVar
+            -- blocking io, must use Chan
+            -- We use chan because the monad may fire into the delegate more than once
             Left ma -> do
-                v <- lift $ NewEmptyMVar newEmptyMVar
+                v <- lift $ newChanIO
+                -- Aim: convert the Concur IO effects into a command to be interpreted
+                -- first, wrap the @ma@ we want to run into a Concur, then fmap it
+                -- to convert @Concur c a@ to @Concur c c@
                 runProgramT $ exec' $ flip fmap (Concur @c $ pure (Left ma))
-                    (\a -> command' $ flip fmap (k a)  -- convert @Concur c c@ to a @c@
-                        (\b -> command' -- convert @Concur c c@ to a @c@
-                            -- Concur c c
-                            $ command_ <$> (Concur @c $ pure $ Left $ putMVar v b)))
-                pure $ Left $ takeMVar v
+                    -- goal :: a -> c
+                    -- Given the result of @a@, run through the bind @k@
+                    -- to get the resultant @Concur c b@, then fmap it
+                    -- to convert @Concur c b@ to @Concur c c@
+                    -- then command' converts @Concur c c@ to a @c@
+                    (\a -> command' $ flip fmap (k a)
+                        -- goal :: b -> c
+                        -- Given @b@ result @Concur c b@ from the bind,
+                        -- 'writeChan' the @b@ of bind into @v@
+                        (\b -> command' -- command' converts @Concur c c@ to a @c@
+                            -- command_ converts @Concur c ()@ to @Concur c c@
+                            $ command_ <$> (Concur @c $ pure $ Left $ writeChan v b)))
+                -- return the IO effect to "fire" @a@ into the Chan
+                -- FIXME: protect this against BlockedIndefinitelyOnMVar?
+                pure $ Left $ readChan v
 
 -- | The monad @Concur c c@ itself is a command @c@, so an instance of @MonadCodify@ canbe made
 instance AsConcur c => MonadCodify c (Concur c) where
@@ -424,6 +444,65 @@ instance AsConcur c => MonadProgram c (Concur c) where
 -- The Concur monad allows scheduling the command in concurrently with other commands.
 instance AsConcur c => MonadDelegate (Concur c) where
     delegate f = Concur $ do
-        v <- lift $ NewEmptyMVar newEmptyMVar
-        b <- runConcur $ f (\a -> Concur $ lift $ pure $ Left $ putMVar v a)
-        pure $ Left (either id pure b *> takeMVar v)
+        v <- lift $ newChanIO
+        -- e :: Either (IO ()) ()
+        e <- runConcur $ f (\a -> Concur $ lift $ pure $ Left $ writeChan v a)
+        -- The Left blocking action runs any IO () if necessary, and then readChan v
+        pure $ Left (either id pure e *> readChan v)
+
+-- | Passthrough instance
+instance AsConcur c => Also (Concur c) a where
+    -- This creates a left blocking action that will produce any values
+    -- before a BlockedIndefinitelyOnMVar.
+    alsoZero = finish (pure ())
+
+    f `also` g = delegate $ \fire -> Concur $ do
+        (x, y) <- liftA2 (,) (runConcur f) (runConcur g)
+        case (x, y) of
+            (Right x', Right y') ->
+                -- purely fire both results straight awy
+                (runConcur $ fire x') *> (runConcur $ fire y')
+            (Right x', Left y') -> do
+                -- fire the pure Right bit straight away
+                void . runConcur $ fire x'
+                scheduleConcur fire y'
+                pure $ Right ()
+            (Left x', Right y') -> do
+                -- fire the pure Right bit straight away
+                void . runConcur $ fire y'
+                scheduleConcur fire x'
+                pure $ Right ()
+            (Left x', Left y') -> do
+                scheduleConcur fire x'
+                scheduleConcur fire y'
+                pure $ Right ()
+      where
+        -- forkIO for the potentially blocking IO
+        -- y' :: IO a
+        -- Aim: convert the Concur IO effects into a command to be interpreted
+        -- first, wrap the Left IO we want to run into a Concur, then fmap it
+        -- to convert @Concur c a@ to @Concur c c@
+        scheduleConcur fire ma = runProgramT $ exec' $ flip fmap (Concur @c $ pure (Left ma))
+            -- goal :: a -> c
+            -- Given the result of @a@, run through the @fire@
+            -- to get the resultant @Concur c ()@, then fmap it
+            -- to convert @Concur c ()@ to @Concur c c@
+            -- then command' converts @Concur c c@ to a @c@
+            (\a -> command' $ command_ <$> (fire a))
+
+-- -- -- | Passthrough instance
+-- -- instance Monoid (Concur c a) where
+-- --     mempty = lift mempty
+-- -- #if !MIN_VERSION_base(4,11,0)
+-- --     -- follow the `also` instance of 'StateT'
+-- --     (ProgramT f) `mappend` (ProgramT g) = ProgramT $ do
+-- --         (x, y) <- liftA2 (,) f g
+-- --         lift $ pure x `mappend` pure y
+-- -- #endif
+
+-- -- | Passthrough instance
+-- instance Semigroup (Concur c a) where
+--     -- follow the `also` instance of 'StateT'
+--     (ProgramT f) <> (ProgramT g) = ProgramT $ do
+--         (x, y) <- liftA2 (,) f g
+--         lift $ pure x <> pure y

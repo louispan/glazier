@@ -40,6 +40,9 @@ instance (MonadBenignIO m) => MonadBenignIO (MaybeT m) where
 instance (MonadBenignIO m) => MonadBenignIO (ReaderT r m) where
     liftBenignIO = lift . liftBenignIO
 
+instance (MonadBenignIO m) => MonadBenignIO (ContT r m) where
+    liftBenignIO = lift . liftBenignIO
+
 instance (MonadBenignIO m) => MonadBenignIO (ExceptT e m) where
     liftBenignIO = lift . liftBenignIO
 

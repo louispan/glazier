@@ -98,21 +98,33 @@ fixVerifyExec' ::
     ) => (c -> Which xs) -> ((c -> m ()) -> (Proxy ys, c -> MaybeT m [c])) -> c -> m ()
 fixVerifyExec' unCmd maybeExecuteCmd = fixExec' (verifyExec unCmd . maybeExecuteCmd)
 
+
+-- FIXME: The evaluator need to read from Chan multiple times until BlockedIndefinitelyOnMVar
 execConcur ::
     MonadUnliftIO m
     => (c -> m ())
-    -> Concur c a
-    -> m a
+    -> Concur c c
+    -> m ()
 execConcur executor (Concur m) = do
-        ea <- execConcur_ executor
+        ea <- execConcur_
         -- Now run the possibly blocking io
-        liftIO $ either id pure ea
+        -- LOUISFIXME: protect against BlockedIndefinitelyOnMVar here as well?
+        case ea of
+            Left x ->
+                -- we run mx multiple times until BlockedIndefinitelyOnMVar
+                -- to make sure we have drained all the data from the Chan.
+                -- forkIO discards BlockedIndefinitelyOnMVar.
+                -- DANGER! If the Left IO contains something that will never fail
+                -- then this thread will never be cleaned up.
+                void . U.forkIO . forever $ liftIO x >>= executor
+            Right x -> executor x
   where
-    execConcur_ executor' = do
+    execConcur_ = do
         -- get the list of commands to run
-        (ma, cs) <- liftIO $ unNewEmptyMVar $ runStateT m mempty
+        (ma, cs) <- liftIO $ unNewChanIO $ runStateT m mempty
         -- run the batched commands in separate threads
-        traverse_ (void . U.forkIO . executor') (DL.toList cs)
+        -- forkIO discards BlockedIndefinitelyOnMVar
+        traverse_ (void . U.forkIO . executor) (DL.toList cs)
         pure ma
 
 execIO :: MonadIO m => (c -> m ()) -> IO c -> m ()
