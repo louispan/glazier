@@ -23,6 +23,7 @@ import Data.Foldable
 import Data.Proxy
 import Glazier.Command
 import qualified UnliftIO.Concurrent as U
+import qualified UnliftIO.Async as U
 
 -- | type function to get the list of effects in a @cmd@, parameterized over @c@
 type family CmdTypes cmd c :: [Type]
@@ -39,13 +40,13 @@ instance (AsFacet a (Which (CmdTypes (NoIOCmd c) (NoIOCmd c)))) => AsFacet a (No
 
 -- | Create an executor for a variant in the command type.
 -- returns a tuple with a 'Proxy' to keep track of the the types handled by the executor.
-maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> (Proxy [a], c -> MaybeT m b)
+maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> (Proxy '[a], c -> MaybeT m b)
 maybeExec k = (Proxy, \c -> MaybeT . sequenceA $ (k <$> preview facet c))
 
 -- | Combines executors, keeping track of the combined list of types handled.
 -- redundant-constraints: used to constrain a''
-orExec :: Alternative m => (Proxy a, m b) -> (Proxy a', m b) -> (Proxy (Append a a'), m b)
-orExec (_, m) (_, n) = (Proxy, m <|> n)
+orExec :: Alternative m => (Proxy a, c -> m b) -> (Proxy a', c -> m b) -> (Proxy (Append a a'), c -> m b)
+orExec (_, m) (_, n) = (Proxy, \c -> m c <|> n c)
 infixl 3 `orExec` -- like <|>
 
 -- | Tie an executor with itself to get the final interpreter
@@ -99,31 +100,39 @@ fixVerifyExec' ::
 fixVerifyExec' unCmd maybeExecuteCmd = fixExec' (verifyExec unCmd . maybeExecuteCmd)
 
 
--- FIXME: The evaluator need to read from Chan multiple times until BlockedIndefinitelyOnMVar
 execConcur ::
     MonadUnliftIO m
     => (c -> m ())
     -> Concur c c
     -> m ()
-execConcur executor (Concur m) = do
+execConcur executor c = do
         ea <- execConcur_
         -- Now run the possibly blocking io
         -- LOUISFIXME: protect against BlockedIndefinitelyOnMVar here as well?
         case ea of
-            Left x ->
-                -- we run mx multiple times until BlockedIndefinitelyOnMVar
-                -- to make sure we have drained all the data from the Chan.
-                -- forkIO discards BlockedIndefinitelyOnMVar.
-                -- DANGER! If the Left IO contains something that will never fail
-                -- then this thread will never be cleaned up.
-                void . U.forkIO . forever $ liftIO x >>= executor
+            Left x -> keepRunBlockingIOUntilFinish x
             Right x -> executor x
   where
+    -- we run mx multiple times until BlockedIndefinitelyOnMVar
+    -- to make sure we have drained all the data from the Chan.
+    -- forkIO discards BlockedIndefinitelyOnMVar.
+    -- DANGER! If the Left IO contains something that will never fail
+    -- then this thread will never be cleaned up.
+    keepRunBlockingIOUntilFinish x = do
+        a <- U.async $ do
+            mx <- liftIO x
+            case mx of
+                Nothing -> pure False
+                Just y -> executor y *> pure True
+        e <- U.waitCatch a
+        case e of
+            Left _ -> pure () -- finish up
+            Right False -> pure ()
+            Right True -> keepRunBlockingIOUntilFinish x
     execConcur_ = do
         -- get the list of commands to run
-        (ma, cs) <- liftIO $ unNewChanIO $ runStateT m mempty
+        (ma, cs) <- liftIO $ unNewBusIO $ runStateT (runConcur c) mempty
         -- run the batched commands in separate threads
-        -- forkIO discards BlockedIndefinitelyOnMVar
         traverse_ (void . U.forkIO . executor) (DL.toList cs)
         pure ma
 

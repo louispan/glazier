@@ -11,9 +11,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TypeApplications #-}
-
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Command
@@ -40,17 +39,20 @@ module Glazier.Command
     , concurringly
     , concurringly_
     , AsConcur
-    , Concur(..)
-    , NewChanIO
+    -- | NB. Don't export Concur constructor to guarantee
+    -- there are no Left IO effects that never fail.
+    , Concur
+    , runConcur
+    , NewBusIO
     -- | NB. Don't export NewChanIO constructor to guarantee
     -- that that it only contains non-blocking 'newEmptyMVar' IO.
-    , newChanIO
-    , unNewChanIO
+    , newBusIO
+    , unNewBusIO
     ) where
 
 import Control.Also
 import Control.Applicative
-import Control.Concurrent
+import Control.Concurrent.STM
 import Control.Lens
 import Control.Monad.Cont
 import Control.Monad.Delegate
@@ -64,11 +66,13 @@ import Control.Monad.Trans.State.Lazy as Lazy
 import Control.Monad.Trans.State.Strict as Strict
 import Control.Monad.Trans.Writer.Lazy as Lazy
 import Control.Monad.Trans.Writer.Strict as Strict
+import Data.Bool
 import Data.Diverse.Lens
 import qualified Data.DList as DL
+import Data.Semigroup
 import qualified GHC.Generics as G
 import Glazier.Command.Internal
-import Data.Semigroup
+import qualified Pipes.Concurrent as PC
 
 ----------------------------------------------
 -- Command utilties
@@ -348,7 +352,7 @@ type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
 newtype Concur c a = Concur
-    -- The base IO doesn't block (only does newChan), but may return an IO that blocks.
+    -- The base IO doesn't block (only does 'Pipes.Concurrent.spawn'), but may return an IO that blocks.
     -- The return is @Either (IO a) a@ where 'Left' is used for blocking IO
     -- that could potentially fail with BlockedIndefinitelyOnMVar.
     -- Tje 'Right' is used for nonblocking pure values.
@@ -359,8 +363,11 @@ newtype Concur c a = Concur
     -- The interpreter 'Glazier.Command.Exec.execConcur' will run any Left IO action
     -- until failure with BlockedIndefinitelyOnMVar to drain all the values from the Chan.
     -- DNAGER: So do not put anything in Left IO that will never eventually fail!
-    { runConcur :: Strict.StateT (DL.DList c) NewChanIO (Either (IO a) a)
-    } deriving (G.Generic)
+    (Strict.StateT (DL.DList c) NewBusIO (Either (IO (Maybe a)) a)
+    ) deriving (G.Generic)
+
+runConcur :: Concur c a -> Strict.StateT (DL.DList c) NewBusIO (Either (IO (Maybe a)) a)
+runConcur (Concur m) = m
 
 instance Show (Concur c a) where
     showsPrec _ _ = showString "Concur"
@@ -380,20 +387,20 @@ concurringly_ :: (MonadProgram c m, AsConcur c) => Concur c () -> m ()
 concurringly_ = invoke_
 
 instance Functor (Concur c) where
-    fmap f (Concur m) = Concur $ (either (Left . fmap f) (Right . f)) <$> m
+    fmap f (Concur m) = Concur $ (either (Left . fmap (fmap f)) (Right . f)) <$> m
 
 -- | Applicative instand allows building up list of commands without blocking
 instance Applicative (Concur c) where
     pure = Concur . pure . pure
     (Concur f) <*> (Concur a) = Concur $ liftA2 go f a
       where
-        go :: Either (IO (a -> b)) (a -> b)
-             -> Either (IO a) a
-             -> Either (IO b) b
+        go :: Either (IO (Maybe (a -> b))) (a -> b)
+             -> Either (IO (Maybe a)) a
+             -> Either (IO (Maybe b)) b
         go g b = case (g, b) of
-            (Left g', Left b') -> Left (g' <*> b')
-            (Left g', Right b') -> Left (($b') <$> g')
-            (Right g', Left b') -> Left (g' <$> b')
+            (Left g', Left b') -> Left $ (\x y -> x <*> y) <$> g' <*> b'
+            (Left g', Right b') -> Left ((fmap ($b')) <$> g')
+            (Right g', Left b') -> Left ((fmap g') <$> b')
             (Right g', Right b') -> Right (g' b')
 
 -- Monad instance can't build commands without blocking.
@@ -406,7 +413,7 @@ instance (AsConcur c) => Monad (Concur c) where
             -- blocking io, must use Chan
             -- We use chan because the monad may fire into the delegate more than once
             Left ma -> do
-                v <- lift $ newChanIO
+                (o, i) <- lift newBusIO
                 -- Aim: convert the Concur IO effects into a command to be interpreted
                 -- first, wrap the @ma@ we want to run into a Concur, then fmap it
                 -- to convert @Concur c a@ to @Concur c c@
@@ -422,10 +429,10 @@ instance (AsConcur c) => Monad (Concur c) where
                         -- 'writeChan' the @b@ of bind into @v@
                         (\b -> command' -- command' converts @Concur c c@ to a @c@
                             -- command_ converts @Concur c ()@ to @Concur c c@
-                            $ command_ <$> (Concur @c $ pure $ Left $ writeChan v b)))
+                            $ command_ <$> (Concur @c . pure . Left . atomically
+                                $ (bool Nothing (Just ())) <$> PC.send o b)))
                 -- return the IO effect to "fire" @a@ into the Chan
-                -- FIXME: protect this against BlockedIndefinitelyOnMVar?
-                pure $ Left $ readChan v
+                pure . Left . atomically $ PC.recv i
 
 -- | The monad @Concur c c@ itself is a command @c@, so an instance of @MonadCodify@ canbe made
 instance AsConcur c => MonadCodify c (Concur c) where
@@ -444,11 +451,12 @@ instance AsConcur c => MonadProgram c (Concur c) where
 -- The Concur monad allows scheduling the command in concurrently with other commands.
 instance AsConcur c => MonadDelegate (Concur c) where
     delegate f = Concur $ do
-        v <- lift $ newChanIO
-        -- e :: Either (IO ()) ()
-        e <- runConcur $ f (\a -> Concur $ lift $ pure $ Left $ writeChan v a)
+        (o, i) <- lift $ newBusIO
+        -- e :: Either (IO (Maybe ())) ()
+        e <- runConcur $ f (\a -> Concur . lift . pure . Left . atomically
+            $ (bool Nothing (Just ())) <$> PC.send o a)
         -- The Left blocking action runs any IO () if necessary, and then readChan v
-        pure $ Left (either id pure e *> readChan v)
+        pure $ Left (either void pure e *> atomically (PC.recv i))
 
 -- | Passthrough instance
 instance AsConcur c => Also (Concur c) a where
@@ -490,19 +498,11 @@ instance AsConcur c => Also (Concur c) a where
             -- then command' converts @Concur c c@ to a @c@
             (\a -> command' $ command_ <$> (fire a))
 
--- -- -- | Passthrough instance
--- -- instance Monoid (Concur c a) where
--- --     mempty = lift mempty
--- -- #if !MIN_VERSION_base(4,11,0)
--- --     -- follow the `also` instance of 'StateT'
--- --     (ProgramT f) `mappend` (ProgramT g) = ProgramT $ do
--- --         (x, y) <- liftA2 (,) f g
--- --         lift $ pure x `mappend` pure y
--- -- #endif
+instance AsConcur c => Monoid (Concur c a) where
+    mempty = alsoZero
+#if !MIN_VERSION_base(4,11,0)
+    mappend = also
+#endif
 
--- -- | Passthrough instance
--- instance Semigroup (Concur c a) where
---     -- follow the `also` instance of 'StateT'
---     (ProgramT f) <> (ProgramT g) = ProgramT $ do
---         (x, y) <- liftA2 (,) f g
---         lift $ pure x <> pure y
+instance AsConcur c => Semigroup (Concur c a) where
+    (<>) = also

@@ -13,6 +13,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
+
 -- Example of interpreting using polymorphic variant
 -- with the help of ContT and State
 module Main where
@@ -111,15 +112,15 @@ execEffects' ::
     , AsConcur cmd
     , MonadUnliftIO m
     )
-    => (cmd -> m ()) -> cmd -> MaybeT m (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], ())
-execEffects' executor c =
-    maybeExec (traverse_ @[] executor) c
-    `orMaybeExec` maybeExec ((>>= executor). execConcur executor) c
-    `orMaybeExec` maybeExec (execIOEffect executor) c
-    `orMaybeExec` maybeExec execHelloWorldEffect c
+    => (cmd -> m ()) -> (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], cmd -> MaybeT m ())
+execEffects' executor =
+    maybeExec (traverse_ @[] executor)
+    `orExec` maybeExec (execConcur executor)
+    `orExec` maybeExec (execIOEffect executor)
+    `orExec` maybeExec execHelloWorldEffect
 
 execEffects :: MonadUnliftIO m => AppCmd -> m ()
-execEffects = verifyExec unAppCmd (fixExec execEffects')
+execEffects = fixVerifyExec unAppCmd execEffects'
 
 ----------------------------------------------
 -- Test interpreter
@@ -142,6 +143,7 @@ testIOEffect _ (PutStrLn str) = do
     liftIO $ atomically $ modifyTVar' xs (\xs' -> ("PutStrLn " <> show str) : xs')
 
 testIOEffect executor (GetLine k) = do
+    liftIO $ putStrLn "GetLine 1"
     xs <- view (hasTag @Output)
     ys <- view (hasTag @Input)
     y <- liftIO $ atomically $ do
@@ -152,6 +154,7 @@ testIOEffect executor (GetLine k) = do
         writeTVar ys ys''
         modifyTVar' xs (\xs' -> show y <> " <- GetLine" : xs')
         pure y
+    liftIO $ putStrLn "GetLine 2"
     executor $ k y
 
 testHelloWorldEffect ::
@@ -177,12 +180,12 @@ testEffects' ::
     , AsFacet HelloWorldEffect cmd
     , AsConcur cmd
     )
-    => (cmd -> m ()) -> cmd -> MaybeT m (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], ())
-testEffects' executor c =
-    maybeExec (traverse_ @[] executor) c
-    `orMaybeExec` maybeExec ((>>= executor) . execConcur executor) c
-    `orMaybeExec` maybeExec (testIOEffect executor) c
-    `orMaybeExec` maybeExec testHelloWorldEffect c
+    => (cmd -> m ()) -> (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], cmd -> MaybeT m ())
+testEffects' executor =
+    maybeExec (traverse_ @[] executor)
+    `orExec` maybeExec (execConcur executor)
+    `orExec` maybeExec (testIOEffect executor)
+    `orExec` maybeExec testHelloWorldEffect
 
 -- | Tie testEffects_ with itself to get the final interpreter
 testEffects ::
@@ -191,7 +194,7 @@ testEffects ::
     , Has (Tagged Input (TVar [String])) r
     , MonadUnliftIO m
     ) => AppCmd -> m ()
-testEffects = verifyExec unAppCmd (fixExec testEffects')
+testEffects = fixVerifyExec unAppCmd testEffects'
 
 ----------------------------------------------
 -- programs

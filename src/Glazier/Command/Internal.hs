@@ -3,13 +3,13 @@
 
 module Glazier.Command.Internal where
 
-import Control.Concurrent.Chan
+import qualified Pipes.Concurrent as PC
 
-newtype NewChanIO a = NewChanIO (IO a)
+newtype NewBusIO a = NewBusIO (IO a)
     deriving (Functor, Applicative, Monad)
 
-unNewChanIO :: NewChanIO a -> IO a
-unNewChanIO (NewChanIO m) = m
+unNewBusIO :: NewBusIO a -> IO a
+unNewBusIO (NewBusIO m) = m
 
-newChanIO :: NewChanIO (Chan a)
-newChanIO = NewChanIO newChan
+newBusIO :: NewBusIO (PC.Output a, PC.Input a)
+newBusIO = NewBusIO $ PC.spawn PC.unbounded
