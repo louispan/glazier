@@ -130,7 +130,7 @@ execConcur executor c = do
         as <- traverse (U.async . executor) (DL.toList cs)
         -- now wait for all the threads to finish writing to TQueue
         traverse_ (void . U.waitCatch) as
-        -- return the io to read from the TQueue
+        -- now it is ok to return the io to read from the TQueue
         pure r
 
 execIO :: MonadIO m => (c -> m ()) -> IO c -> m ()

@@ -1,5 +1,4 @@
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
-
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
@@ -16,18 +15,18 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Command
-    ( MonadCodify(..)
-    , codify'
-    , ProgramT(..)
-    , Program
-    , programT'
-    , runProgramT'
-    , MonadProgram(..)
-    , MonadCommand
+    ( MonadProgram(..)
     , command
     , command'
     , command_
     , commands
+    , MonadCodify(..)
+    , codify'
+    , MonadCommand
+    , ProgramT(..)
+    , Program
+    , programT'
+    , runProgramT'
     , exec
     , exec'
     , delegatify
@@ -38,17 +37,15 @@ module Glazier.Command
     , sequentially
     , concurringly
     , concurringly_
-    , AsConcur
-    -- | NB. Don't export Concur constructor to guarantee
-    -- there are no Left IO effects that never fail.
-    , Concur
-    , ConcurResult(..)
-    , runConcur
-    -- | NB. Don't export NewChanIO constructor to guarantee
-    -- that that it only contains non-blocking 'newEmptyMVar' IO.
+    -- | NB. Don't export NonBlocking constructor to guarantee
+    -- that that it only contains non-blocking IO.
     , NonBlocking
     , unNonBlocking
+    , ConcurResult(..)
+    , Concur(..)
+    , AsConcur
     ) where
+
 
 import Control.Also
 import Control.Applicative
@@ -71,9 +68,16 @@ import Data.Semigroup
 import qualified GHC.Generics as G
 import Glazier.Command.Internal
 
+
 ----------------------------------------------
 -- Command utilties
 ----------------------------------------------
+
+-- | Monad that can be added instructions of commands.
+-- To extract the command see 'MonadCodify'
+class Monad m => MonadProgram c m | m -> c where
+    -- | Add a command to the program
+    instruct :: c -> m ()
 
 -- | convert a request type to a command type.
 -- This is used for commands that doesn't have a continuation.
@@ -115,6 +119,13 @@ codify' m = do
     f <- codify (const m)
     pure (f ())
 
+type MonadCommand c m =
+    ( MonadProgram c m
+    , MonadDelegate m
+    , MonadCodify c m
+    -- , AsFacet [c] c
+    )
+
 -- | A monad transformer with a instance of 'MonadProgram'.
 -- Although this is a transfromer, it does not "passthrough" instance of
 -- 'MonadReader', etc from the inner monad.
@@ -129,6 +140,12 @@ newtype ProgramT c m a = ProgramT { runProgramT :: Strict.StateT (DL.DList c) m 
     deriving (Functor, Applicative, Monad, MonadTrans, MFunctor, MonadIO)
 
 type Program c = ProgramT c Identity
+
+programT' :: (DL.DList c -> m (a, DL.DList c)) -> ProgramT c m a
+programT' = ProgramT . Strict.StateT
+
+runProgramT' :: ProgramT c m a -> DL.DList c -> m (a, DL.DList c)
+runProgramT' = Strict.runStateT . runProgramT
 
 -- | Passthrough instance
 instance (Also m a, Monad m) => Also (ProgramT c m) a where
@@ -151,18 +168,6 @@ instance (Semigroup (m a), Monad m) => Semigroup (ProgramT c m a) where
     (ProgramT f) <> (ProgramT g) = ProgramT $ do
         (x, y) <- liftA2 (,) f g
         lift $ pure x <> pure y
-
-programT' :: (DL.DList c -> m (a, DL.DList c)) -> ProgramT c m a
-programT' = ProgramT . Strict.StateT
-
-runProgramT' :: ProgramT c m a -> DL.DList c -> m (a, DL.DList c)
-runProgramT' = Strict.runStateT . runProgramT
-
--- | Monad that can be added instructions of commands.
--- To extract the command see 'MonadCodify'
-class Monad m => MonadProgram c m | m -> c where
-    -- | Add a command to the program
-    instruct :: c -> m ()
 
 -- | Instance that does real work by running the State of commands with mempty.
 -- Essentially a Writer monad, but using a State monad so it can be
@@ -248,12 +253,6 @@ instance (MonadDelegate m, MonadCodify c m) => MonadCodify c (ExceptT e m) where
 instance MonadProgram c m => MonadProgram c (ExceptT e m) where
     instruct = lift . instruct
 
-type MonadCommand c m =
-    ( MonadProgram c m
-    , MonadDelegate m
-    , MonadCodify c m
-    -- , AsFacet [c] c
-    )
 
 -- | @'exec' = 'instruct' . 'command'@
 --
@@ -342,7 +341,19 @@ sequentially = id
 -- Batch independant commands
 ----------------------------------------------
 
-type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
+-- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c a@
+-- This is 'invoke' type constrained to @Concur c a@
+concurringly ::
+    ( MonadCommand c m
+    , AsConcur c
+    ) => Concur c a -> m a
+concurringly = invoke
+
+-- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
+-- A simpler variation of 'concurringly' that only requires a @MonadProgram c m@
+-- This is 'invoke_' type constrained to @Concur c ()@
+concurringly_ :: (MonadProgram c m, AsConcur c) => Concur c () -> m ()
+concurringly_ = invoke_
 
 data ConcurResult a
     = ConcurRead (NonBlocking IO [a]) -- read all the values from a TQueue
@@ -360,37 +371,22 @@ instance Applicative ConcurResult where
     (ConcurRead f) <*> (ConcurRead a) = ConcurRead ((\f' a' -> f' <*> a') <$> f <*> a)
 
 -- | This monad is intended to be used with @ApplicativeDo@ to allow do notation
--- for composing commands that can be run concurrently, and to wait for *all*
--- the concurrent commands to finish.
+-- for composing commands that can be run concurrently, where you want to
+-- wait for *all* the concurrent commands to finish.
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
 newtype Concur c a = Concur
     -- The base monad NonBlocking IO doesn't block/retry.
     -- This distinction prevents nested layers of Chan for monadic binds with pure Right values.
     -- See the instance of 'Monad' for 'Concur'.
-    ( ProgramT c (NonBlocking IO) -- NonBlocking IO only contains safe non-blocking io
+    { runConcur :: ProgramT c (NonBlocking IO) -- NonBlocking IO only contains safe non-blocking io
             (ConcurResult a)
-    ) deriving (G.Generic)
+    } deriving (G.Generic)
 
-runConcur :: Concur c a -> ProgramT c (NonBlocking IO) (ConcurResult a)
-runConcur (Concur m) = m
+type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
 
 instance Show (Concur c a) where
     showsPrec _ _ = showString "Concur"
-
--- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c a@
--- This is 'invoke' type constrained to @Concur c a@
-concurringly ::
-    ( MonadCommand c m
-    , AsConcur c
-    ) => Concur c a -> m a
-concurringly = invoke
-
--- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
--- A simpler variation of 'concurringly' that only requires a @MonadProgram c m@
--- This is 'invoke_' type constrained to @Concur c ()@
-concurringly_ :: (MonadProgram c m, AsConcur c) => Concur c () -> m ()
-concurringly_ = invoke_
 
 instance Functor (Concur c) where
     fmap f (Concur m) = Concur $ (fmap f) <$> m
@@ -413,7 +409,7 @@ instance (AsConcur c) => Monad (Concur c) where
             -- blocking io, must use Chan
             -- We use chan because the monad may fire into the delegate more than once
             ConcurRead ma -> do
-                (recv, send) <- lift newParcel
+                (recv, send) <- lift newBusIO
                 -- Aim: convert the Concur IO effects into a command to be interpreted
                 -- first, wrap the @ma@ we want to run into a Concur, then fmap it
                 -- to convert @Concur c a@ to @Concur c c@
@@ -451,7 +447,7 @@ instance AsConcur c => MonadProgram c (Concur c) where
 -- The Concur monad allows scheduling the command in concurrently with other commands.
 instance AsConcur c => MonadDelegate (Concur c) where
     delegate f = Concur $ do
-        (recv, send) <- lift newParcel
+        (recv, send) <- lift newBusIO
         -- e :: ConcurResult ()
         e <- runConcur $ f (\a -> Concur @c $ lift $ fmap ConcurPure $ send a)
 
