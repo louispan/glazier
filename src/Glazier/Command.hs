@@ -42,17 +42,16 @@ module Glazier.Command
     -- | NB. Don't export Concur constructor to guarantee
     -- there are no Left IO effects that never fail.
     , Concur
+    , ConcurResult(..)
     , runConcur
-    , NewBusIO
     -- | NB. Don't export NewChanIO constructor to guarantee
     -- that that it only contains non-blocking 'newEmptyMVar' IO.
-    , newBusIO
-    , unNewBusIO
+    , NonBlocking
+    , unNonBlocking
     ) where
 
 import Control.Also
 import Control.Applicative
-import Control.Concurrent.STM
 import Control.Lens
 import Control.Monad.Cont
 import Control.Monad.Delegate
@@ -66,13 +65,11 @@ import Control.Monad.Trans.State.Lazy as Lazy
 import Control.Monad.Trans.State.Strict as Strict
 import Control.Monad.Trans.Writer.Lazy as Lazy
 import Control.Monad.Trans.Writer.Strict as Strict
-import Data.Bool
 import Data.Diverse.Lens
 import qualified Data.DList as DL
 import Data.Semigroup
 import qualified GHC.Generics as G
 import Glazier.Command.Internal
-import qualified Pipes.Concurrent as PC
 
 ----------------------------------------------
 -- Command utilties
@@ -347,26 +344,35 @@ sequentially = id
 
 type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
 
+data ConcurResult a
+    = ConcurRead (NonBlocking IO [a]) -- read all the values from a TQueue
+    | ConcurPure a -- pure result, no IO required
+
+instance Functor ConcurResult where
+    fmap f (ConcurRead a) = ConcurRead (fmap f <$> a)
+    fmap f (ConcurPure a) = ConcurPure (f a)
+
+instance Applicative ConcurResult where
+    pure = ConcurPure
+    (ConcurPure f) <*> (ConcurPure a) = ConcurPure (f a)
+    (ConcurPure f) <*> (ConcurRead a) = ConcurRead ((pure f <*>) <$> a)
+    (ConcurRead f) <*> (ConcurPure a) = ConcurRead ((\f' -> ($ a) <$> f') <$> f)
+    (ConcurRead f) <*> (ConcurRead a) = ConcurRead ((\f' a' -> f' <*> a') <$> f <*> a)
+
 -- | This monad is intended to be used with @ApplicativeDo@ to allow do notation
--- for composing commands that can be run concurrently.
+-- for composing commands that can be run concurrently, and to wait for *all*
+-- the concurrent commands to finish.
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
 newtype Concur c a = Concur
-    -- The base IO doesn't block (only does 'Pipes.Concurrent.spawn'), but may return an IO that blocks.
-    -- The return is @Either (IO a) a@ where 'Left' is used for blocking IO
-    -- that could potentially fail with BlockedIndefinitelyOnMVar.
-    -- Tje 'Right' is used for nonblocking pure values.
+    -- The base monad NonBlocking IO doesn't block/retry.
     -- This distinction prevents nested layers of Chan for monadic binds with pure Right values.
     -- See the instance of 'Monad' for 'Concur'.
-    -- Once a Left blocking IO is returned, then all subsequent binds require another nested MVar.
-    -- So it is more efficient to groups of pure binds first before binding with blocking code.
-    -- The interpreter 'Glazier.Command.Exec.execConcur' will run any Left IO action
-    -- until failure with BlockedIndefinitelyOnMVar to drain all the values from the Chan.
-    -- DNAGER: So do not put anything in Left IO that will never eventually fail!
-    (Strict.StateT (DL.DList c) NewBusIO (Either (IO (Maybe a)) a)
+    ( ProgramT c (NonBlocking IO) -- NonBlocking IO only contains safe non-blocking io
+            (ConcurResult a)
     ) deriving (G.Generic)
 
-runConcur :: Concur c a -> Strict.StateT (DL.DList c) NewBusIO (Either (IO (Maybe a)) a)
+runConcur :: Concur c a -> ProgramT c (NonBlocking IO) (ConcurResult a)
 runConcur (Concur m) = m
 
 instance Show (Concur c a) where
@@ -387,37 +393,31 @@ concurringly_ :: (MonadProgram c m, AsConcur c) => Concur c () -> m ()
 concurringly_ = invoke_
 
 instance Functor (Concur c) where
-    fmap f (Concur m) = Concur $ (either (Left . fmap (fmap f)) (Right . f)) <$> m
+    fmap f (Concur m) = Concur $ (fmap f) <$> m
 
 -- | Applicative instand allows building up list of commands without blocking
 instance Applicative (Concur c) where
     pure = Concur . pure . pure
-    (Concur f) <*> (Concur a) = Concur $ liftA2 go f a
-      where
-        go :: Either (IO (Maybe (a -> b))) (a -> b)
-             -> Either (IO (Maybe a)) a
-             -> Either (IO (Maybe b)) b
-        go g b = case (g, b) of
-            (Left g', Left b') -> Left $ (\x y -> x <*> y) <$> g' <*> b'
-            (Left g', Right b') -> Left ((fmap ($b')) <$> g')
-            (Right g', Left b') -> Left ((fmap g') <$> b')
-            (Right g', Right b') -> Right (g' b')
+    (Concur f) <*> (Concur a) = Concur $ liftA2 (<*>) f a
 
 -- Monad instance can't build commands without blocking.
+-- Once a ConcurRead blocking IO is returned, then all subsequent binds require another nested bus.
+-- So it is more efficient to groups of pure binds first before binding with blocking code.
+-- See the instance of 'Monad' for 'Concur'.
 instance (AsConcur c) => Monad (Concur c) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
         case m' of
-            -- pure value, no blocking required, avoid using Chan.
-            Right a -> runConcur $ k a
+            -- pure value, no blocking required, avoid using Bus.
+            ConcurPure a -> runConcur $ k a
             -- blocking io, must use Chan
             -- We use chan because the monad may fire into the delegate more than once
-            Left ma -> do
-                (o, i) <- lift newBusIO
+            ConcurRead ma -> do
+                (recv, send) <- lift newParcel
                 -- Aim: convert the Concur IO effects into a command to be interpreted
                 -- first, wrap the @ma@ we want to run into a Concur, then fmap it
                 -- to convert @Concur c a@ to @Concur c c@
-                runProgramT $ exec' $ flip fmap (Concur @c $ pure (Left ma))
+                exec' $ flip fmap (Concur @c $ pure $ ConcurRead ma)
                     -- goal :: a -> c
                     -- Given the result of @a@, run through the bind @k@
                     -- to get the resultant @Concur c b@, then fmap it
@@ -426,13 +426,13 @@ instance (AsConcur c) => Monad (Concur c) where
                     (\a -> command' $ flip fmap (k a)
                         -- goal :: b -> c
                         -- Given @b@ result @Concur c b@ from the bind,
-                        -- 'writeChan' the @b@ of bind into @v@
+                        -- write the @b@ of bind into @v@
                         (\b -> command' -- command' converts @Concur c c@ to a @c@
                             -- command_ converts @Concur c ()@ to @Concur c c@
-                            $ command_ <$> (Concur @c . pure . Left . atomically
-                                $ (bool Nothing (Just ())) <$> PC.send o b)))
-                -- return the IO effect to "fire" @a@ into the Chan
-                pure . Left . atomically $ PC.recv i
+                            $ command_ <$> (Concur @c $ lift $ fmap ConcurPure $ send b)))
+
+                -- return the effect to read the contents of the TQueue
+                pure $ ConcurRead recv
 
 -- | The monad @Concur c c@ itself is a command @c@, so an instance of @MonadCodify@ canbe made
 instance AsConcur c => MonadCodify c (Concur c) where
@@ -442,7 +442,7 @@ instance AsConcur c => MonadCodify c (Concur c) where
          . f -- a -> Concur c ()
 
 instance AsConcur c => MonadProgram c (Concur c) where
-    instruct c = Concur $ Right <$> Strict.modify' (`DL.snoc` c)
+    instruct = Concur . fmap ConcurPure . instruct
 
 -- | This instance makes usages of 'eval'' concurrent when used
 -- inside a 'concurringly' or 'concurringly_' block.
@@ -451,12 +451,18 @@ instance AsConcur c => MonadProgram c (Concur c) where
 -- The Concur monad allows scheduling the command in concurrently with other commands.
 instance AsConcur c => MonadDelegate (Concur c) where
     delegate f = Concur $ do
-        (o, i) <- lift $ newBusIO
-        -- e :: Either (IO (Maybe ())) ()
-        e <- runConcur $ f (\a -> Concur . lift . pure . Left . atomically
-            $ (bool Nothing (Just ())) <$> PC.send o a)
-        -- The Left blocking action runs any IO () if necessary, and then readChan v
-        pure $ Left (either void pure e *> atomically (PC.recv i))
+        (recv, send) <- lift newParcel
+        -- e :: ConcurResult ()
+        e <- runConcur $ f (\a -> Concur @c $ lift $ fmap ConcurPure $ send a)
+
+        pure $ ConcurRead $ do
+            case e of
+                 -- run any other reads, but discard the unit result
+                ConcurRead r -> void r
+                -- no stm effects to do
+                _ -> pure ()
+            -- also do this read
+            recv
 
 -- | Passthrough instance
 instance AsConcur c => Also (Concur c) a where
@@ -467,30 +473,30 @@ instance AsConcur c => Also (Concur c) a where
     f `also` g = delegate $ \fire -> Concur $ do
         (x, y) <- liftA2 (,) (runConcur f) (runConcur g)
         case (x, y) of
-            (Right x', Right y') ->
+            (ConcurPure x', ConcurPure y') ->
                 -- purely fire both results straight awy
                 (runConcur $ fire x') *> (runConcur $ fire y')
-            (Right x', Left y') -> do
+            (ConcurPure x', ConcurRead y') -> do
                 -- fire the pure Right bit straight away
                 void . runConcur $ fire x'
                 scheduleConcur fire y'
-                pure $ Right ()
-            (Left x', Right y') -> do
+                pure $ ConcurPure ()
+            (ConcurRead x', ConcurPure y') -> do
                 -- fire the pure Right bit straight away
                 void . runConcur $ fire y'
                 scheduleConcur fire x'
-                pure $ Right ()
-            (Left x', Left y') -> do
+                pure $ ConcurPure ()
+            (ConcurRead x', ConcurRead y') -> do
                 scheduleConcur fire x'
                 scheduleConcur fire y'
-                pure $ Right ()
+                pure $ ConcurPure ()
       where
         -- forkIO for the potentially blocking IO
         -- y' :: IO a
         -- Aim: convert the Concur IO effects into a command to be interpreted
-        -- first, wrap the Left IO we want to run into a Concur, then fmap it
+        -- first, wrap the IO we want to run into a Concur, then fmap it
         -- to convert @Concur c a@ to @Concur c c@
-        scheduleConcur fire ma = runProgramT $ exec' $ flip fmap (Concur @c $ pure (Left ma))
+        scheduleConcur fire ma = exec' $ flip fmap (Concur @c $ pure $ ConcurRead ma)
             -- goal :: a -> c
             -- Given the result of @a@, run through the @fire@
             -- to get the resultant @Concur c ()@, then fmap it

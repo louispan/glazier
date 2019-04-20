@@ -22,7 +22,6 @@ import qualified Data.DList as DL
 import Data.Foldable
 import Data.Proxy
 import Glazier.Command
-import qualified UnliftIO.Concurrent as U
 import qualified UnliftIO.Async as U
 
 -- | type function to get the list of effects in a @cmd@, parameterized over @c@
@@ -106,35 +105,33 @@ execConcur ::
     -> Concur c c
     -> m ()
 execConcur executor c = do
-        ea <- execConcur_
-        -- Now run the possibly blocking io
-        -- LOUISFIXME: protect against BlockedIndefinitelyOnMVar here as well?
-        case ea of
-            Left x -> keepRunBlockingIOUntilFinish x
-            Right x -> executor x
+        r <- execConcur_
+        case r of
+            -- Now run the io to read from the TQueue
+            ConcurRead x -> readAndExecute x
+            ConcurPure x -> executor x
   where
     -- we run mx multiple times until BlockedIndefinitelyOnMVar
     -- to make sure we have drained all the data from the Chan.
     -- forkIO discards BlockedIndefinitelyOnMVar.
     -- DANGER! If the Left IO contains something that will never fail
     -- then this thread will never be cleaned up.
-    keepRunBlockingIOUntilFinish x = do
-        a <- U.async $ do
-            mx <- liftIO x
-            case mx of
-                Nothing -> pure False
-                Just y -> executor y *> pure True
-        e <- U.waitCatch a
-        case e of
-            Left _ -> pure () -- finish up
-            Right False -> pure ()
-            Right True -> keepRunBlockingIOUntilFinish x
+    readAndExecute x = do
+        as <- liftIO (unNonBlocking x)
+        -- for each value obtained, fire them back to the executor
+        as' <- traverse (U.async . executor) as
+        -- now wait for all the threads to finish
+        traverse_ (void . U.waitCatch) as'
     execConcur_ = do
         -- get the list of commands to run
-        (ma, cs) <- liftIO $ unNewBusIO $ runStateT (runConcur c) mempty
+        (r, cs) <- liftIO $ unNonBlocking $ (`runStateT` mempty) $ runProgramT $ runConcur c
         -- run the batched commands in separate threads
-        traverse_ (void . U.forkIO . executor) (DL.toList cs)
-        pure ma
+        -- these should produce and write values to the bus channel
+        as <- traverse (U.async . executor) (DL.toList cs)
+        -- now wait for all the threads to finish writing to TQueue
+        traverse_ (void . U.waitCatch) as
+        -- return the io to read from the TQueue
+        pure r
 
 execIO :: MonadIO m => (c -> m ()) -> IO c -> m ()
 execIO executor m = liftIO m >>= executor

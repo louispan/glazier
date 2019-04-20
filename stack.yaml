@@ -50,8 +50,10 @@ extra-deps:
 - async-2.2.1
 - data-has-0.3.0.0
 - newtype-generics-0.5.3
-- unliftio-0.2.7.0
-- unliftio-core-0.1.1.0
+- unliftio-0.2.10
+- unliftio-core-0.1.2.0
+- stm-2.5.0.0
+- StateVar-1.1.1.1
 - '/Users/louis/repo/hs/alternators'
 
 # Override default flag values for local packages and extra-deps

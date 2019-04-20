@@ -143,7 +143,6 @@ testIOEffect _ (PutStrLn str) = do
     liftIO $ atomically $ modifyTVar' xs (\xs' -> ("PutStrLn " <> show str) : xs')
 
 testIOEffect executor (GetLine k) = do
-    liftIO $ putStrLn "GetLine 1"
     xs <- view (hasTag @Output)
     ys <- view (hasTag @Input)
     y <- liftIO $ atomically $ do
@@ -154,7 +153,6 @@ testIOEffect executor (GetLine k) = do
         writeTVar ys ys''
         modifyTVar' xs (\xs' -> show y <> " <- GetLine" : xs')
         pure y
-    liftIO $ putStrLn "GetLine 2"
     executor $ k y
 
 testHelloWorldEffect ::
