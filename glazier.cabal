@@ -31,7 +31,6 @@ library
                        Glazier.Logger
                        Glazier.Logger.Exec
   build-depends:       base >= 4.7 && < 5
-                     , async >= 2.2
                      , alternators >= 2.0
                      , data-diverse >= 4.6
                      , data-diverse-lens >= 4.3

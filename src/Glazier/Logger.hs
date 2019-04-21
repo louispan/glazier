@@ -1,4 +1,6 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -10,11 +12,14 @@ module Glazier.Logger where
 
 import Data.Diverse.Lens
 import Data.Maybe
-import Data.Semigroup
 import qualified Data.Text.Lazy as TL
 import GHC.Stack
 import Glazier.Benign
 import Glazier.Command
+
+#if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
+import Data.Semigroup
+#endif
 
 -- Modified from GHC.Stack to be shorter, to use TL.Text
 -- and to operate on [(String, SrcLoc)]
@@ -39,6 +44,8 @@ callStackTop = listToMaybe . getCallStack
 
 class Monad m => MonadLogLevel m where
     logLevel :: m (Benign IO (Maybe LogLevel))
+    -- default logLevel :: (MonadTrans t, Monad m) => t m (Benign IO (Maybe LogLevel))
+    -- logLevel = lift logLevel
 
 type Logger c m = (AsFacet LogLine c, MonadCommand c m, MonadLogLevel m)
 

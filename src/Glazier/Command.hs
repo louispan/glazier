@@ -64,10 +64,12 @@ import Control.Monad.Trans.Writer.Lazy as Lazy
 import Control.Monad.Trans.Writer.Strict as Strict
 import Data.Diverse.Lens
 import qualified Data.DList as DL
-import Data.Semigroup
 import qualified GHC.Generics as G
 import Glazier.Command.Internal
 
+#if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
+import Data.Semigroup
+#endif
 
 ----------------------------------------------
 -- Command utilties
@@ -137,7 +139,7 @@ type MonadCommand c m =
 -- 'Concur' has a instance of 'MonadDelegate' which allows concurrent evaluation of
 -- commands with return values to handle.
 newtype ProgramT c m a = ProgramT { runProgramT :: Strict.StateT (DL.DList c) m a }
-    deriving (Functor, Applicative, Monad, MonadTrans, MFunctor, MonadIO)
+    deriving (Functor, Applicative, Monad, MonadTrans, MFunctor)
 
 type Program c = ProgramT c Identity
 
@@ -148,7 +150,7 @@ runProgramT' :: ProgramT c m a -> DL.DList c -> m (a, DL.DList c)
 runProgramT' = Strict.runStateT . runProgramT
 
 -- | Passthrough instance
-instance (Also m a, Monad m) => Also (ProgramT c m) a where
+instance (Also a m, Monad m) => Also a (ProgramT c m) where
     alsoZero = lift alsoZero
     ProgramT f `also` ProgramT g = ProgramT $ f `also` g
 
@@ -461,7 +463,7 @@ instance AsConcur c => MonadDelegate (Concur c) where
             recv
 
 -- | Passthrough instance
-instance AsConcur c => Also (Concur c) a where
+instance AsConcur c => Also a (Concur c) where
     -- This creates a left blocking action that will produce any values
     -- before a BlockedIndefinitelyOnMVar.
     alsoZero = finish (pure ())

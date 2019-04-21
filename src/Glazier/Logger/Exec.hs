@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Glazier.Logger.Exec where
@@ -5,12 +6,15 @@ module Glazier.Logger.Exec where
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Maybe
-import Data.Semigroup
 import qualified Data.Text.Lazy as TL
 import Data.Time
 import GHC.Stack
 import Glazier.Benign.Internal
 import Glazier.Logger
+
+#if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
+import Data.Semigroup
+#endif
 
 execLogger :: LogLine
     -> Benign IO (Maybe (LogLevel, CallStack, TL.Text))
