@@ -4,6 +4,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -25,8 +26,9 @@ module Glazier.Command
     , MonadCommand
     , ProgramT(..)
     , Program
-    , programT'
-    , runProgramT'
+    , runProgram
+    , execProgramT
+    , execProgram
     , exec
     , exec'
     , delegatify
@@ -129,56 +131,65 @@ type MonadCommand c m =
     )
 
 -- | A monad transformer with a instance of 'MonadProgram'.
--- Although this is a transfromer, it does not "passthrough" instance of
--- 'MonadReader', etc from the inner monad.
--- It is a CPS WriterT (ie, StateT) of list of commands.
 -- Using it as a base monad @Program c@ gives an instance of 'MonadCodify'.
--- This is typically used in a transformer stack with @ContT ()@ for an instance of 'MonadDelegate'
--- for sequentially building up commands with return values to handle.
--- 'Concur', a newtype of @Strict.StateT (DL.DList c) NewEmptyMVar x@ is also a instance of 'MonadCodify',
+-- Although this is a MonadTrans, it does not "passthrough" instance of
+-- 'MonadReader', etc from the inner monad, because it is not possible to
+-- have an instance of MonadProgram if ProgramT is on top of another StateT transformer.
+-- It is a CPS WriterT (ie, StateT) of list of commands.
+-- This is typically used in a transformer stack with @ContT ()@ on top
+-- for an instance of 'MonadDelegate' which allows sequentially building up commands
+-- with return values to handle.
+-- 'Concur', a newtype of @ProgramT c (NonBlocking IO)@ is also a instance of 'MonadCodify',
 -- 'Concur' has a instance of 'MonadDelegate' which allows concurrent evaluation of
 -- commands with return values to handle.
-newtype ProgramT c m a = ProgramT { runProgramT :: Strict.StateT (DL.DList c) m a }
-    deriving (Functor, Applicative, Monad, MonadTrans, MFunctor)
+newtype ProgramT c m a = ProgramT { runProgramT :: DL.DList c -> m (a, DL.DList c) }
+    deriving (Functor, Applicative, Monad)
+        via Strict.StateT (DL.DList c) m
+    deriving (MonadTrans, MFunctor)
+        via Strict.StateT (DL.DList c)
+
+runProgram :: Program c a -> DL.DList c -> (a, DL.DList c)
+runProgram m s = runIdentity $ runProgramT m s
+
+execProgramT :: (Monad m) => ProgramT c m a -> DL.DList c -> m (DL.DList c)
+execProgramT m s = snd <$> (runProgramT m s)
+
+execProgram :: Program c a -> DL.DList c -> DL.DList c
+execProgram m s = runIdentity $ execProgramT m s
 
 type Program c = ProgramT c Identity
-
-programT' :: (DL.DList c -> m (a, DL.DList c)) -> ProgramT c m a
-programT' = ProgramT . Strict.StateT
-
-runProgramT' :: ProgramT c m a -> DL.DList c -> m (a, DL.DList c)
-runProgramT' = Strict.runStateT . runProgramT
 
 -- | Passthrough instance
 instance (Also a m, Monad m) => Also a (ProgramT c m) where
     alsoZero = lift alsoZero
-    ProgramT f `also` ProgramT g = ProgramT $ f `also` g
+    ProgramT f `also` ProgramT g = ProgramT $ Strict.runStateT $
+        (Strict.StateT f) `also` (Strict.StateT g)
 
 -- | Passthrough instance
 instance (Monoid (m a), Monad m) => Monoid (ProgramT c m a) where
     mempty = lift mempty
 #if !MIN_VERSION_base(4,11,0)
     -- follow the `also` instance of 'StateT'
-    (ProgramT f) `mappend` (ProgramT g) = ProgramT $ do
-        (x, y) <- liftA2 (,) f g
+    (ProgramT f) `mappend` (ProgramT g) = ProgramT $ Strict.runStateT $ do
+        (x, y) <- liftA2 (,) (Strict.StateT f) (Strict.StateT g)
         lift $ pure x `mappend` pure y
 #endif
 
 -- | Passthrough instance
 instance (Semigroup (m a), Monad m) => Semigroup (ProgramT c m a) where
     -- follow the `also` instance of 'StateT'
-    (ProgramT f) <> (ProgramT g) = ProgramT $ do
-        (x, y) <- liftA2 (,) f g
+    (ProgramT f) <> (ProgramT g) = ProgramT $ Strict.runStateT $ do
+        (x, y) <- liftA2 (,) (Strict.StateT f) (Strict.StateT g)
         lift $ pure x <> pure y
 
 -- | Instance that does real work by running the State of commands with mempty.
 -- Essentially a Writer monad, but using a State monad so it can be
 -- used inside a ContT which only has an instance for MonadState.
 instance AsFacet [c] c => MonadCodify c (Program c) where
-    codify f = pure $ commands . DL.toList . (`Strict.execState` mempty) . runProgramT . f
+    codify f = pure $ commands . DL.toList . (`execProgram` mempty) . f
 
 instance Monad m => MonadProgram c (ProgramT c m) where
-    instruct c = ProgramT $ Strict.modify' (`DL.snoc` c)
+    instruct c = ProgramT $ Strict.runStateT $ Strict.modify' (`DL.snoc` c)
 
 -- | Passthrough instance
 instance (MonadCodify c m) => MonadCodify c (Strict.StateT s m) where

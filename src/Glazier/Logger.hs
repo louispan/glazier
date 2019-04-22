@@ -44,8 +44,6 @@ callStackTop = listToMaybe . getCallStack
 
 class Monad m => MonadLogLevel m where
     logLevel :: m (Benign IO (Maybe LogLevel))
-    -- default logLevel :: (MonadTrans t, Monad m) => t m (Benign IO (Maybe LogLevel))
-    -- logLevel = lift logLevel
 
 type Logger c m = (AsFacet LogLine c, MonadCommand c m, MonadLogLevel m)
 

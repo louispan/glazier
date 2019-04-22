@@ -124,7 +124,7 @@ execConcur executor c = do
         traverse_ (void . U.waitCatch) as'
     execConcur_ = do
         -- get the list of commands to run
-        (r, cs) <- liftIO $ unNonBlocking $ (`runStateT` mempty) $ runProgramT $ runConcur c
+        (r, cs) <- liftIO $ unNonBlocking $ (`runProgramT` mempty) $ runConcur c
         -- run the batched commands in separate threads
         -- these should produce and write values to the bus channel
         as <- traverse (U.async . executor) (DL.toList cs)
