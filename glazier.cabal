@@ -38,6 +38,7 @@ library
                      , lens >= 4.14
                      , mtl >= 2.2
                      , mmorph >= 1.0
+                     , newtype-generics >= 0.5
                      , stm >= 2.5
                      , StateVar >= 1.1.1
                      , tagged >= 0.8

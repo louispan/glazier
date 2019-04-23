@@ -16,7 +16,7 @@ import Control.Lens
 import Control.Monad.IO.Unlift
 import Control.Monad.State.Strict
 import Control.Monad.Trans.Maybe
-import Control.Monad.Trans.Maybe.Extras
+import Control.Monad.Trans.Extras
 import Data.Diverse.Lens
 import qualified Data.DList as DL
 import Data.Foldable

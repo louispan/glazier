@@ -3,6 +3,7 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeApplications #-}
@@ -10,6 +11,8 @@
 
 module Glazier.Logger where
 
+import Control.Monad.Reader
+import Control.Monad.Morph
 import Data.Diverse.Lens
 import Data.Maybe
 import qualified Data.Text.Lazy as TL
@@ -42,14 +45,23 @@ prettyCallStack' = TL.intercalate "\n " . fmap prettyCallSite' . getCallStack
 callStackTop :: CallStack -> Maybe (String, SrcLoc)
 callStackTop = listToMaybe . getCallStack
 
-class Monad m => MonadLogLevel m where
-    logLevel :: m (Benign IO (Maybe LogLevel))
+--------------------------------------------------------------------
 
-type Logger c m = (AsFacet LogLine c, MonadCommand c m, MonadLogLevel m)
+class Monad m => LogLevelReader m where
+    askLogLevel :: m (Benign IO (Maybe LogLevel))
+    localLogLevel :: (Benign IO (Maybe LogLevel) -> Benign IO (Maybe LogLevel)) -> m a -> m a
 
-instance Show LogLine where
-    showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
-        showString "LogLine " . shows lvl . showString " at " . showString (TL.unpack $ prettyCallStack' cs)
+instance {-# OVERLAPPABLE #-} (Monad (t m), MonadTrans t, MFunctor t, LogLevelReader m) => LogLevelReader (t m) where
+    askLogLevel = lift askLogLevel
+    localLogLevel f m = hoist (localLogLevel f) m
+
+instance {-# OVERLAPPABLE #-} Monad m => LogLevelReader (ReaderT (Benign IO (Maybe LogLevel)) m) where
+    askLogLevel = ask
+    localLogLevel = local
+
+--------------------------------------------------------------------
+
+type Logger c m = (AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
 
 data LogLevel
     = TRACE
@@ -62,11 +74,15 @@ data LogLevel
 
 data LogLine = LogLine (Benign IO (Maybe LogLevel)) LogLevel CallStack (Benign IO TL.Text)
 
+instance Show LogLine where
+    showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
+        showString "LogLine " . shows lvl . showString " at " . showString (TL.unpack $ prettyCallStack' cs)
+
 logLine :: (Logger c m)
     => LogLevel -> CallStack -> Benign IO TL.Text
     -> m ()
 logLine lvl cs m = do
-    lvl' <- logLevel
+    lvl' <- askLogLevel
     exec $ LogLine lvl' lvl cs m
 
 logExec :: (Show cmd, AsFacet cmd c, Logger c m)

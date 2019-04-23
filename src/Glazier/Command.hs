@@ -64,6 +64,7 @@ import Control.Monad.Trans.State.Lazy as Lazy
 import Control.Monad.Trans.State.Strict as Strict
 import Control.Monad.Trans.Writer.Lazy as Lazy
 import Control.Monad.Trans.Writer.Strict as Strict
+import Control.Newtype.Generics
 import Data.Diverse.Lens
 import qualified Data.DList as DL
 import qualified GHC.Generics as G
@@ -143,10 +144,13 @@ type MonadCommand c m =
 -- 'Concur' has a instance of 'MonadDelegate' which allows concurrent evaluation of
 -- commands with return values to handle.
 newtype ProgramT c m a = ProgramT { runProgramT :: DL.DList c -> m (a, DL.DList c) }
+    deriving (G.Generic)
     deriving (Functor, Applicative, Monad)
         via Strict.StateT (DL.DList c) m
     deriving (MonadTrans, MFunctor)
         via Strict.StateT (DL.DList c)
+
+instance Newtype (ProgramT c m a)
 
 runProgram :: Program c a -> DL.DList c -> (a, DL.DList c)
 runProgram m s = runIdentity $ runProgramT m s
@@ -392,9 +396,8 @@ newtype Concur c a = Concur
     -- The base monad NonBlocking IO doesn't block/retry.
     -- This distinction prevents nested layers of Chan for monadic binds with pure Right values.
     -- See the instance of 'Monad' for 'Concur'.
-    { runConcur :: ProgramT c (NonBlocking IO) -- NonBlocking IO only contains safe non-blocking io
-            (ConcurResult a)
-    } deriving (G.Generic)
+    { runConcur :: ProgramT c (NonBlocking IO) (ConcurResult a)
+    } deriving (G.Generic, G.Generic1)
 
 type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
 
