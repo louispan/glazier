@@ -35,7 +35,7 @@ newtype DebugIO c = DebugIO (IO c)
 
 -- | Run an arbitrary IO. This should only be used for testing.
 -- If DEBUGIO is not defined, then this does nothing.
-debugIO :: (HasCallStack, AsDebugIO c, Logger r c m) => IO a -> m a
+debugIO :: (HasCallStack, AsDebugIO c, AsFacet LogLine c, MonadCommand c m, LogLevelReader m) => IO a -> m a
 #ifdef DEBUGIO
 debugIO m = logInvoke TRACE callStack $ DebugIO m
 #else

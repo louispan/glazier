@@ -128,7 +128,6 @@ type MonadCommand c m =
     ( MonadProgram c m
     , MonadDelegate m
     , MonadCodify c m
-    -- , AsFacet [c] c
     )
 
 -- | A monad transformer with a instance of 'MonadProgram'.
