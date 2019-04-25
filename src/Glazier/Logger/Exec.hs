@@ -9,7 +9,7 @@ import Control.Monad.Trans.Maybe
 import qualified Data.Text.Lazy as TL
 import Data.Time
 import GHC.Stack
-import Glazier.Benign.Internal
+import Control.Monad.Benign.Internal
 import Glazier.Logger
 
 #if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)

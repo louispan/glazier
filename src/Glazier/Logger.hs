@@ -11,13 +11,12 @@
 
 module Glazier.Logger where
 
+import Control.Monad.Benign
 import Control.Monad.Reader
-import Control.Monad.Morph
 import Data.Diverse.Lens
 import Data.Maybe
 import qualified Data.Text.Lazy as TL
 import GHC.Stack
-import Glazier.Benign
 import Glazier.Command
 
 #if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
@@ -53,7 +52,7 @@ callStackTop = listToMaybe . getCallStack
 class Monad m => LogLevelReader m where
     askLogLevel :: m (Benign IO (Maybe LogLevel))
 
-instance {-# OVERLAPPABLE #-} (Monad (t m), MonadTrans t, MFunctor t, LogLevelReader m) => LogLevelReader (t m) where
+instance {-# OVERLAPPABLE #-} (Monad (t m), MonadTrans t, LogLevelReader m) => LogLevelReader (t m) where
     askLogLevel = lift askLogLevel
 
 instance {-# OVERLAPPABLE #-} Monad m => LogLevelReader (ReaderT (Benign IO (Maybe LogLevel)) m) where

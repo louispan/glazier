@@ -20,12 +20,10 @@ Flag debug
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Glazier.Command
+  exposed-modules:     Control.Monad.Benign.Exec
+                       Glazier.Command
                        Glazier.Command.Exec
                        Glazier.Command.Internal
-                       Glazier.Benign
-                       Glazier.Benign.Exec
-                       Glazier.Benign.Internal
                        Glazier.DebugIO
                        Glazier.DebugIO.Exec
                        Glazier.Logger

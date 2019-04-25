@@ -1,9 +1,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 
-module Glazier.Benign.Exec where
+module Control.Monad.Benign.Exec where
 
+import Control.Monad.Benign
 import Control.Monad.IO.Class
-import Glazier.Benign
 import Glazier.Command.Exec
 
 execBenignIO :: MonadIO m => (c -> m ()) -> Benign IO c -> m ()
