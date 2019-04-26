@@ -29,6 +29,8 @@ module Glazier.Command
     , runProgram
     , execProgramT
     , execProgram
+    , execProgramT'
+    , execProgram'
     , exec
     , exec'
     , delegatify
@@ -160,6 +162,12 @@ execProgramT m s = snd <$> (runProgramT m s)
 execProgram :: Program c a -> DL.DList c -> DL.DList c
 execProgram m s = runIdentity $ execProgramT m s
 
+execProgramT' :: (Monad m) => ProgramT c m a -> m (DL.DList c)
+execProgramT' m = execProgramT m mempty
+
+execProgram' :: Program c a -> DL.DList c
+execProgram' m = runIdentity $ execProgramT' m
+
 type Program c = ProgramT c Identity
 
 -- | Passthrough instance
@@ -189,7 +197,7 @@ instance (Semigroup (m a), Monad m) => Semigroup (ProgramT c m a) where
 -- Essentially a Writer monad, but using a State monad so it can be
 -- used inside a ContT which only has an instance for MonadState.
 instance AsFacet [c] c => MonadCodify c (Program c) where
-    codify f = pure $ commands . DL.toList . (`execProgram` mempty) . f
+    codify f = pure $ commands . DL.toList . execProgram' . f
 
 instance Monad m => MonadProgram c (ProgramT c m) where
     instruct c = ProgramT $ Strict.runStateT $ Strict.modify' (`DL.snoc` c)

@@ -23,7 +23,6 @@ import Control.Lens
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
 import Control.Monad.Reader
-import Control.Monad.State.Strict
 import Control.Monad.Trans.Cont
 import Control.Monad.Trans.Maybe
 import Data.Diverse.Lens
@@ -271,7 +270,7 @@ main :: IO ()
 main = do
     -- Reduce the program to the list of commands.
     let cs :: [AppCmd]
-        cs =  DL.toList $ (`execState` mempty) $ runProgramT ioProgramWithConcur
+        cs =  DL.toList $ execProgram' ioProgramWithConcur
         -- cs =  DL.toList $ (`execState` mempty) ioProgramWithOnlyConcur
 
     -- Shoud randomly have different results depending on which
