@@ -65,10 +65,9 @@ instance {-# OVERLAPPABLE #-} Monad m => LogLevelReader (ReaderT (Benign IO (May
 data LogLevel
     = TRACE
     | DEBUG
-    | INFO_
-    | WARN_
-    -- will also print callstack
-    | ERROR
+    | INFO_ -- ^ underscore to make the log levels the same character width
+    | WARN_ -- ^ underscore to make the log levels the same character width
+    | ERROR -- ^ will also print callstack
     deriving (Eq, Show, Read, Ord)
 
 data LogLine = LogLine (Benign IO (Maybe LogLevel)) LogLevel CallStack (Benign IO TL.Text)
