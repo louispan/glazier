@@ -77,22 +77,23 @@ instance Show LogLine where
     showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
         showString "LogLine " . shows lvl . showString " at " . showString (TL.unpack $ prettyCallStack' cs)
 
-logLine :: (AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
+logLine :: (AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
     => LogLevel -> CallStack -> Benign IO TL.Text
     -> m ()
 logLine lvl cs m = do
     lvl' <- askLogLevel
     exec $ LogLine lvl' lvl cs m
 
-logExec :: (Show cmd, AsFacet cmd c, AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
+-- LOUISFIXME: Don't use show, but a different benign showy library?
+logExec :: (Show cmd, AsFacet cmd c, AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
     => LogLevel -> CallStack -> cmd -> m ()
 logExec lvl cs c = do
     logLine lvl cs (pure . TL.pack $ show c)
     exec c
 
-logExec' :: (Show (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
+logExec' :: (Show (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
     => LogLevel -> CallStack -> cmd c -> m ()
-logExec' lvl cs c = do
+logExec' lvl cs c = dos
     logLine lvl cs (pure . TL.pack $ show c)
     exec' c
 
@@ -107,3 +108,7 @@ logEval' lvl cs k = delegatify $ logExec' lvl cs . k
 logInvoke :: (Show (cmd c), AsFacet (cmd c) c, Functor cmd, AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
     => LogLevel -> CallStack -> cmd a -> m a
 logInvoke lvl cs c = logEval' lvl cs (<$> c)
+
+logInvoke_ :: (Show (cmd c), AsFacet (cmd c) c, AsFacet [c] c, Functor cmd, AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
+    => LogLevel -> CallStack -> cmd () -> m ()
+logInvoke_ lvl cs = logExec' lvl cs . fmap command_
