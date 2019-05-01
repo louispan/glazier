@@ -3,12 +3,10 @@
 
 module Glazier.Logger.Exec where
 
-import Control.Monad
-import Control.Monad.Trans
-import Control.Monad.Trans.Maybe
 import qualified Data.Text.Lazy as TL
 import Data.Time
 import GHC.Stack
+import Control.Monad.Benign
 import Control.Monad.Benign.Internal
 import Glazier.Logger
 
@@ -16,20 +14,28 @@ import Glazier.Logger
 import Data.Semigroup
 #endif
 
-execLogger :: LogLine
-    -> Benign IO (Maybe (LogLevel, CallStack, TL.Text))
-execLogger (LogLine lvl' lvl cs entry) = runMaybeT $ do
-    allowedLvl <- MaybeT lvl'
-    guard (allowedLvl >= lvl)
-    lift $ (\a -> (lvl, cs, a)) <$> entry
+-- execLogger :: LogLine
+--     -> Benign IO (Maybe (LogLevel, CallStack, TL.Text))
+-- execLogger (LogLine lvl cs entry) = runMaybeT $ do
+--     allowedLvl <- MaybeT lvl'
+--     guard (allowedLvl >= lvl)
+--     lift $ (\a -> (lvl, cs, a)) <$> entry
 
-defaultLogLine :: LogLevel -> CallStack -> TL.Text -> Benign IO TL.Text
-defaultLogLine lvl cs entry = do
-    dt <- Benign getCurrentTime
-    -- todo get time, etc
-    let dt' = TL.pack $ formatTime defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S.%q")) dt
-    pure $ dt' <> " " <> (TL.pack $ show lvl) <> " " <> entry <> prettyErrorStack lvl
-  where
-    -- Return a stack only if ERROR, otherwise mempty
-    prettyErrorStack ERROR = " [" <> prettyCallStack' cs <> "]"
-    prettyErrorStack _ = mempty
+-- execLogger :: LogLine
+--     -> Benign IO (LogLevel, CallStack, TL.Text)
+-- execLogger (LogLine lvl cs entry) = (\a -> (lvl, cs, a)) <$> entry
+
+defaultLogLine :: MonadBenignIO m => LogLine -> m (UTCTime, LogLevel, CallStack, TL.Text)
+defaultLogLine (LogLine lvl cs entry) = (\dt a -> (dt, lvl, cs, a))
+    <$> (liftBenignIO $ Benign getCurrentTime)
+    <*> (liftBenignIO entry)
+
+--     dt <- Benign getCurrentTime
+--     -- todo get time, etc
+--     let dt' = TL.pack $ formatTime defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S.%q")) dt
+--     pure $ dt' <> " " <> (TL.pack $ show lvl) <> " " <> entry <> prettyErrorStack lvl
+--   where
+--     -- Return a stack only if ERROR, otherwise mempty
+--     prettyErrorStack ERROR = " [" <> prettyCallStack' cs <> "]"
+--     prettyErrorStack _ = mempty
+

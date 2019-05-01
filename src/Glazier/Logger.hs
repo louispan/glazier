@@ -11,8 +11,8 @@
 
 module Glazier.Logger where
 
+import Control.Monad.Observer
 import Control.Monad.Benign
-import Control.Monad.Reader
 import Data.Diverse.Lens
 import Data.Maybe
 import qualified Data.Text.Lazy as TL
@@ -46,22 +46,6 @@ callStackTop = listToMaybe . getCallStack
 
 --------------------------------------------------------------------
 
--- | NB. There is no 'local' equivalent for 'LogLevelReader' because of 'Benign IO' return.
--- The whole point of 'Benign IO' is to allow the loglevel is modifiable at runtime,
--- but @local (const $ pure $ Just TRACE)@ would mean that the log level is hardcoded.
-class Monad m => LogLevelReader m where
-    askLogLevel :: m (Benign IO (Maybe LogLevel))
-
-instance {-# OVERLAPPABLE #-} (Monad (t m), MonadTrans t, LogLevelReader m) => LogLevelReader (t m) where
-    askLogLevel = lift askLogLevel
-
-instance {-# OVERLAPPABLE #-} Monad m => LogLevelReader (ReaderT (Benign IO (Maybe LogLevel)) m) where
-    askLogLevel = ask
-
---------------------------------------------------------------------
-
--- type Logger c m = (AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
-
 data LogLevel
     = TRACE
     | DEBUG
@@ -70,44 +54,61 @@ data LogLevel
     | ERROR -- ^ will also print callstack
     deriving (Eq, Show, Read, Ord)
 
-data LogLine = LogLine (Benign IO (Maybe LogLevel)) LogLevel CallStack (Benign IO TL.Text)
+data LogLine = LogLine LogLevel CallStack (Benign IO TL.Text)
 
 instance Show LogLine where
-    showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
+    showsPrec p (LogLine lvl cs _) = showParen (p >= 11) $
         showString "LogLine " . shows lvl . showString " at " . showString (TL.unpack $ prettyCallStack' cs)
 
-logLine :: (AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
+--------------------------------------------------------------------
+
+type MonadLogger m = MonadObserver LogLine m
+
+-- -- | NB. There is no 'local' equivalent for 'LogLevelReader' because of 'Benign IO' return.
+-- -- The whole point of 'Benign IO' is to allow the loglevel is modifiable at runtime,
+-- -- but @local (const $ pure $ Just TRACE)@ would mean that the log level is hardcoded.
+-- class Monad m => LogLevelReader m where
+--     askLogLevel :: m (Benign IO (Maybe LogLevel))
+
+-- instance {-# OVERLAPPABLE #-} (Monad (t m), MonadTrans t, LogLevelReader m) => LogLevelReader (t m) where
+--     askLogLevel = lift askLogLevel
+
+-- instance {-# OVERLAPPABLE #-} Monad m => LogLevelReader (ReaderT (Benign IO (Maybe LogLevel)) m) where
+--     askLogLevel = ask
+
+--------------------------------------------------------------------
+
+logLine :: MonadLogger m
     => LogLevel -> CallStack -> Benign IO TL.Text
     -> m ()
-logLine lvl cs m = do
-    lvl' <- askLogLevel
-    exec $ LogLine lvl' lvl cs m
+logLine lvl cs str = observe $ LogLine lvl cs str
 
 -- LOUISFIXME: Don't use show, but a different benign showy library?
-logExec :: (Show cmd, AsFacet cmd c, AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
+logExec :: (Show cmd, AsFacet cmd c, MonadProgram c m, MonadLogger m)
     => LogLevel -> CallStack -> cmd -> m ()
 logExec lvl cs c = do
     logLine lvl cs (pure . TL.pack $ show c)
     exec c
 
-logExec' :: (Show (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
+logExec' :: (Show (cmd c), AsFacet (cmd c) c, MonadProgram c m, MonadLogger m)
     => LogLevel -> CallStack -> cmd c -> m ()
-logExec' lvl cs c = dos
+logExec' lvl cs c = do
     logLine lvl cs (pure . TL.pack $ show c)
     exec' c
 
-logEval :: (Show cmd, AsFacet cmd c, AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
+logEval :: (Show cmd, AsFacet cmd c, MonadCommand c m, MonadLogger m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd) -> m a
 logEval lvl cs k = delegatify $ logExec lvl cs . k
 
-logEval' :: (Show (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
+logEval' :: (Show (cmd c), AsFacet (cmd c) c, MonadCommand c m, MonadLogger m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd c) -> m a
 logEval' lvl cs k = delegatify $ logExec' lvl cs . k
 
-logInvoke :: (Show (cmd c), AsFacet (cmd c) c, Functor cmd, AsFacet LogLine c, MonadCommand c m, LogLevelReader m)
+logInvoke :: (Show (cmd c), AsFacet (cmd c) c, Functor cmd, MonadCommand c m, MonadLogger m)
     => LogLevel -> CallStack -> cmd a -> m a
 logInvoke lvl cs c = logEval' lvl cs (<$> c)
 
-logInvoke_ :: (Show (cmd c), AsFacet (cmd c) c, AsFacet [c] c, Functor cmd, AsFacet LogLine c, MonadProgram c m, LogLevelReader m)
+logInvoke_ :: (Show (cmd c), AsFacet (cmd c) c, AsFacet [c] c, Functor cmd, MonadProgram c m, MonadLogger m)
     => LogLevel -> CallStack -> cmd () -> m ()
 logInvoke_ lvl cs = logExec' lvl cs . fmap command_
+

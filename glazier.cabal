@@ -27,7 +27,7 @@ library
                        Glazier.DebugIO
                        Glazier.DebugIO.Exec
                        Glazier.Logger
-                       Glazier.Logger.Exec
+                      --  Glazier.Logger.Exec
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 2.0
                      , data-diverse >= 4.6
