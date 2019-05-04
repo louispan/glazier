@@ -12,7 +12,6 @@ module Glazier.Logger where
 
 import Control.Monad.Benign
 import Control.Monad.Context
-import Control.Monad.Reader
 import Data.Diverse.Lens
 import Data.Maybe
 import qualified Data.Text.Lazy as TL

@@ -485,8 +485,6 @@ instance AsConcur c => MonadDelegate (Concur c) where
 
 -- | Passthrough instance
 instance AsConcur c => Also a (Concur c) where
-    -- This creates a left blocking action that will produce any values
-    -- before a BlockedIndefinitelyOnMVar.
     alsoZero = finish (pure ())
 
     f `also` g = delegate $ \fire -> Concur $ do
