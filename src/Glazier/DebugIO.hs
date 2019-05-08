@@ -8,10 +8,9 @@
 
 module Glazier.DebugIO where
 
-#ifdef DEBUGIO
-
 import Data.Diverse.Lens
 import GHC.Stack
+import Glazier.Command
 import Glazier.Logger
 
 type AsDebugIO c = AsFacet (DebugIO c) c
@@ -36,11 +35,7 @@ newtype DebugIO c = DebugIO (IO c)
 -- | Run an arbitrary IO. This should only be used for testing.
 -- If DEBUGIO is not defined, then this does nothing.
 debugIO :: (HasCallStack, AsDebugIO c, AsFacet LogLine c, MonadCommand c m, AskLogLevel m) => IO a -> m a
-#ifdef DEBUGIO
 debugIO m = logInvoke TRACE callStack $ DebugIO m
-#else
-debugIO _ = finish (pure ())
-#endif
 
 -- -- | Variation of 'debugIO' where the IO action returns
 -- -- the next monad action to process.
@@ -53,5 +48,3 @@ debugIO _ = finish (pure ())
 -- #endif
 
 {-# WARNING debugIO "Use this for debugging only. It will be disabled when DEBUGIO, ie cabal flag(debug), is not set" #-}
-
-#endif
