@@ -17,6 +17,8 @@
 
 module Glazier.Command
     ( MonadProgram(..)
+    , Cmd
+    , Cmd'
     , command
     , command'
     , command_
@@ -47,7 +49,7 @@ module Glazier.Command
     , unNonBlocking
     , ConcurResult(..)
     , Concur(..)
-    , AsConcur
+    , CmdConcur
     ) where
 
 
@@ -56,6 +58,7 @@ import Control.Applicative
 import Control.Lens
 import Control.Monad.Cont
 import Control.Monad.Delegate
+import Control.Monad.IO.Class
 import Control.Monad.Morph
 import Control.Monad.Reader
 import Control.Monad.Trans.Cont
@@ -69,8 +72,8 @@ import Control.Monad.Trans.Writer.Strict as Strict
 import Control.Newtype.Generics
 import Data.Diverse.Lens
 import qualified Data.DList as DL
-import qualified GHC.Generics as G
 import Glazier.Command.Internal
+import qualified GHC.Generics as G
 
 #if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
 import Data.Semigroup
@@ -79,6 +82,8 @@ import Data.Semigroup
 ----------------------------------------------
 -- Command utilties
 ----------------------------------------------
+type Cmd a c = AsFacet a c
+type Cmd' f c = AsFacet (f c) c
 
 -- | Monad that can be added instructions of commands.
 -- To extract the command see 'MonadCodify'
@@ -90,27 +95,27 @@ class Monad m => MonadProgram c m | m -> c where
 -- This is used for commands that doesn't have a continuation.
 -- Ie. commands that doesn't "returns" a value from running an effect.
 -- Use 'command'' for commands that require a continuation ("returns" a value).
-command :: (AsFacet cmd c) => cmd -> c
+command :: (Cmd cmd c) => cmd -> c
 command = review facet
 
 -- | A variation of 'command' for commands with a type variable @c@,
 -- which is usually commands that are containers of command,
 -- or commands that require a continuation
 -- Eg. commands that "returns" a value from running an effect.
-command' :: (AsFacet (cmd c) c) => cmd c -> c
+command' :: (Cmd' cmd c) => cmd c -> c
 command' = review facet
 
 -- | This function is useful for 'fmap' a @cmd ()@ into @cmd c@.
 -- A variation of 'command' specific for unit that uses a
--- @AsFacet [c] c@ constraint instead of
--- @AsFacet () c@ to avoid polluting the contstraints
+-- @Cmd' [] c@ constraint instead of
+-- @Cmd () c@ to avoid polluting the contstraints
 -- when 'commands' is used.
-command_ :: (AsFacet [c] c) => () -> c
+command_ :: (Cmd' [] c) => () -> c
 command_ = command' . \() -> []
 
 -- | Convert a list of commands to a command.
 -- This implementation avoids nesting for lists of a single command.
-commands :: (AsFacet [c] c) => [c] -> c
+commands :: (Cmd' [] c) => [c] -> c
 commands [x] = x
 commands xs = command' xs
 
@@ -150,6 +155,9 @@ newtype ProgramT c m a = ProgramT { runProgramT :: DL.DList c -> m (a, DL.DList 
         via Strict.StateT (DL.DList c) m
     deriving (MonadTrans, MFunctor)
         via Strict.StateT (DL.DList c)
+
+instance (MonadIO m) => MonadIO (ProgramT c m) where
+    liftIO = lift . liftIO
 
 instance Newtype (ProgramT c m a)
 
@@ -196,8 +204,12 @@ instance (Semigroup (m a), Monad m) => Semigroup (ProgramT c m a) where
 -- | Instance that does real work by running the State of commands with mempty.
 -- Essentially a Writer monad, but using a State monad so it can be
 -- used inside a ContT which only has an instance for MonadState.
-instance AsFacet [c] c => MonadCodify c (Program c) where
+instance {-# OVERLAPPING #-} Cmd' [] c => MonadCodify c (ProgramT c Identity) where
     codify f = pure $ commands . DL.toList . execProgram' . f
+
+-- | 'ProgramT' is an instance of codify if the innner monad is a 'command''
+instance {-# OVERLAPPABLE #-} (Monad m, Cmd' m c, Cmd' [] c) => MonadCodify c (ProgramT c m) where
+    codify f = pure $ command' . (fmap (commands . DL.toList)) . execProgramT' . f
 
 instance Monad m => MonadProgram c (ProgramT c m) where
     instruct c = ProgramT $ Strict.runStateT $ Strict.modify' (`DL.snoc` c)
@@ -285,11 +297,11 @@ instance MonadProgram c m => MonadProgram c (ExceptT e m) where
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
-exec :: (MonadProgram c m, AsFacet cmd c) => cmd -> m ()
+exec :: (MonadProgram c m, Cmd cmd c) => cmd -> m ()
 exec = instruct . command
 
 -- | @'exec'' = 'instruct' . 'command''@
-exec' :: (MonadProgram c m, AsFacet (cmd c) c) => cmd c -> m ()
+exec' :: (MonadProgram c m, Cmd' cmd c) => cmd c -> m ()
 exec' = instruct . command'
 
 -- | Uses 'delegate' and 'codify' together.
@@ -315,7 +327,7 @@ delegatify m = delegate $ \k -> do
 -- into a `MonadCommand` that fires @a@
 eval ::
     ( MonadCommand c m
-    , AsFacet cmd c
+    , Cmd cmd c
     )
     => ((a -> c) -> cmd) -> m a
 eval k = delegatify $ exec . k
@@ -324,7 +336,7 @@ eval k = delegatify $ exec . k
 -- into a `MonadCommand` that fires @a@
 eval' ::
     ( MonadCommand c m
-    , AsFacet (cmd c) c
+    , Cmd' cmd c
     )
     => ((a -> c) -> cmd c) -> m a
 eval' k = delegatify $ exec' . k
@@ -332,7 +344,7 @@ eval' k = delegatify $ exec' . k
 -- | Convert a functor into a 'MonadCommand' that fires an @a@
 invoke ::
     ( MonadCommand c m
-    , AsFacet (cmd c) c
+    , Cmd' cmd c
     , Functor cmd
     )
     => cmd a -> m a
@@ -341,8 +353,8 @@ invoke c = eval' (<$> c)
 -- A simpler variation of 'invoke' that only requires a @MonadProgram c m@
 invoke_ ::
     ( MonadProgram c m
-    , AsFacet (cmd c) c
-    , AsFacet [c] c
+    , Cmd' cmd c
+    , Cmd' [] c
     , Functor cmd
     )
     => cmd () -> m ()
@@ -369,14 +381,14 @@ sequentially = id
 -- This is 'invoke' type constrained to @Concur c a@
 concurringly ::
     ( MonadCommand c m
-    , AsConcur c
+    , CmdConcur c
     ) => Concur c a -> m a
 concurringly = invoke
 
 -- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
 -- A simpler variation of 'concurringly' that only requires a @MonadProgram c m@
 -- This is 'invoke_' type constrained to @Concur c ()@
-concurringly_ :: (MonadProgram c m, AsConcur c) => Concur c () -> m ()
+concurringly_ :: (MonadProgram c m, CmdConcur c) => Concur c () -> m ()
 concurringly_ = invoke_
 
 data ConcurResult a
@@ -398,7 +410,7 @@ instance Applicative ConcurResult where
 -- for composing commands that can be run concurrently, where you want to
 -- wait for *all* the concurrent commands to finish.
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
--- The 'Monad' instance creates a 'ConcurCmd' command before continuing the bind.
+-- The 'Monad' instance creates a 'CmdConcur' command before continuing the bind.
 newtype Concur c a = Concur
     -- The base monad NonBlocking IO doesn't block/retry.
     -- This distinction prevents nested layers of Chan for monadic binds with pure Right values.
@@ -406,7 +418,7 @@ newtype Concur c a = Concur
     { runConcur :: ProgramT c (NonBlocking IO) (ConcurResult a)
     } deriving (G.Generic, G.Generic1)
 
-type AsConcur c = (AsFacet [c] c, AsFacet (Concur c c) c)
+type CmdConcur c = (Cmd' [] c, AsFacet (Concur c c) c)
 
 instance Show (Concur c a) where
     showsPrec _ _ = showString "Concur"
@@ -423,7 +435,7 @@ instance Applicative (Concur c) where
 -- Once a ConcurRead blocking IO is returned, then all subsequent binds require another nested bus.
 -- So it is more efficient to groups of pure binds first before binding with blocking code.
 -- See the instance of 'Monad' for 'Concur'.
-instance (AsConcur c) => Monad (Concur c) where
+instance (CmdConcur c) => Monad (Concur c) where
     (Concur m) >>= k = Concur $ do
         m' <- m -- get the blocking io action while updating the state
         case m' of
@@ -454,13 +466,13 @@ instance (AsConcur c) => Monad (Concur c) where
                 pure $ ConcurRead recv
 
 -- | The monad @Concur c c@ itself is a command @c@, so an instance of @MonadCodify@ canbe made
-instance AsConcur c => MonadCodify c (Concur c) where
+instance CmdConcur c => MonadCodify c (Concur c) where
     codify f = pure $
          command' -- a -> c
          . fmap command_ -- a -> Concur c c
          . f -- a -> Concur c ()
 
-instance AsConcur c => MonadProgram c (Concur c) where
+instance CmdConcur c => MonadProgram c (Concur c) where
     instruct = Concur . fmap ConcurPure . instruct
 
 -- | This instance makes usages of 'eval'' concurrent when used
@@ -468,7 +480,7 @@ instance AsConcur c => MonadProgram c (Concur c) where
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
 -- The Concur monad allows scheduling the command in concurrently with other commands.
-instance AsConcur c => MonadDelegate (Concur c) where
+instance CmdConcur c => MonadDelegate (Concur c) where
     delegate f = Concur $ do
         (recv, send) <- lift newBusIO
         -- e :: ConcurResult ()
@@ -484,7 +496,7 @@ instance AsConcur c => MonadDelegate (Concur c) where
             recv
 
 -- | Passthrough instance
-instance AsConcur c => Also a (Concur c) where
+instance CmdConcur c => Also a (Concur c) where
     alsoZero = finish (pure ())
 
     f `also` g = delegate $ \fire -> Concur $ do
@@ -521,11 +533,11 @@ instance AsConcur c => Also a (Concur c) where
             -- then command' converts @Concur c c@ to a @c@
             (\a -> command' $ command_ <$> (fire a))
 
-instance AsConcur c => Monoid (Concur c a) where
+instance CmdConcur c => Monoid (Concur c a) where
     mempty = alsoZero
 #if !MIN_VERSION_base(4,11,0)
     mappend = also
 #endif
 
-instance AsConcur c => Semigroup (Concur c a) where
+instance CmdConcur c => Semigroup (Concur c a) where
     (<>) = also

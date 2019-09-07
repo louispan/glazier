@@ -3,7 +3,7 @@
 
 module Glazier.Logger.Exec where
 
-import qualified Data.Text.Lazy as TL
+import qualified Data.Text as T
 import Data.Time
 import GHC.Stack
 import Control.Monad.Benign
@@ -14,28 +14,12 @@ import Glazier.Logger
 import Data.Semigroup
 #endif
 
--- execLogger :: LogLine
---     -> Benign IO (Maybe (LogLevel, CallStack, TL.Text))
--- execLogger (LogLine lvl cs entry) = runMaybeT $ do
---     allowedLvl <- MaybeT lvl'
---     guard (allowedLvl >= lvl)
---     lift $ (\a -> (lvl, cs, a)) <$> entry
+-- basicLogLine :: MonadIO m => LogLine -> m (UTCTime, LogLevel, CallStack, T.Text)
+-- basicLogLine (LogLine lvl cs entry) = (\dt a -> (dt, lvl, cs, a))
+--     <$> (liftIO $ getCurrentTime)
+--     <*> (liftIO entry)
 
--- execLogger :: LogLine
---     -> Benign IO (LogLevel, CallStack, TL.Text)
--- execLogger (LogLine lvl cs entry) = (\a -> (lvl, cs, a)) <$> entry
-
-defaultLogLine :: MonadBenignIO m => LogLine -> m (UTCTime, LogLevel, CallStack, TL.Text)
-defaultLogLine (LogLine lvl cs entry) = (\dt a -> (dt, lvl, cs, a))
-    <$> (liftBenignIO $ Benign getCurrentTime)
-    <*> (liftBenignIO entry)
-
---     dt <- Benign getCurrentTime
---     -- todo get time, etc
---     let dt' = TL.pack $ formatTime defaultTimeLocale (iso8601DateFormat (Just "%H:%M:%S.%q")) dt
---     pure $ dt' <> " " <> (TL.pack $ show lvl) <> " " <> entry <> prettyErrorStack lvl
---   where
---     -- Return a stack only if ERROR, otherwise mempty
---     prettyErrorStack ERROR = " [" <> prettyCallStack' cs <> "]"
---     prettyErrorStack _ = mempty
-
+-- simLogLine :: MonadIO m => LogLine -> m (UTCTime, LogLevel, CallStack, T.Text)
+-- simLogLine (LogLine lvl cs entry) = (\dt a -> (dt, lvl, cs, a))
+--     <$> (liftIO $ getCurrentTime)
+--     <*> (liftIO entry)

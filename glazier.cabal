@@ -15,13 +15,11 @@ tested-with:         GHC == 8.4.1
 
 library
   hs-source-dirs:      src
-  exposed-modules:     Control.Monad.Benign.Exec
-                       Glazier.Command
+  exposed-modules:     Glazier.Command
                        Glazier.Command.Exec
                        Glazier.Command.Internal
-                       Glazier.DebugIO
-                       Glazier.DebugIO.Exec
                        Glazier.Logger
+                       Glazier.ShowIO
                       --  Glazier.Logger.Exec
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 2.0
