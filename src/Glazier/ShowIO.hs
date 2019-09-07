@@ -4,7 +4,11 @@
 
 module Glazier.ShowIO where
 
+import Data.Maybe
+import Data.IORef
 import qualified Data.Text as T
+import System.Mem.Weak
+
 
 class ShowIO a where
     showsPrecIO :: Int  -- ^ the operator precedence of the enclosing
@@ -38,8 +42,17 @@ showParenIO :: Bool -> IO T.Text -> IO T.Text
 showParenIO False x = x
 showParenIO True x = (\y -> '(' `T.cons` y `T.snoc` ')') <$> x
 
-
 instance {-# OVERLAPPABLE #-} Show a => ShowIO a where
     showIO = pure . T.pack . show
     showsPrecIO p x = pure . T.pack $ showsPrec p x ""
     showListIO xs = pure . T.pack $ showList xs ""
+
+instance {-# OVERLAPPABLE #-} ShowIO a => ShowIO (IORef a) where
+    showIO x = readIORef x >>= showIO
+    showsPrecIO p x = readIORef x >>= showsPrecIO p
+    showListIO xs = traverse readIORef xs >>= showListIO
+
+instance {-# OVERLAPPABLE #-} ShowIO a => ShowIO (Weak a) where
+    showIO x = deRefWeak x >>= maybe (pure "(null)") showIO
+    showsPrecIO p x = deRefWeak x >>= maybe (pure "(null)") (showsPrecIO p)
+    showListIO xs = traverse deRefWeak xs >>= showListIO . catMaybes
