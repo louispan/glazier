@@ -51,6 +51,11 @@ type AskLogLevel = MonadAsk (IO (Maybe LogLevel))
 askLogLevel :: AskLogLevel m => m (IO (Maybe LogLevel))
 askLogLevel = askContext
 
+newtype LogName = LogName { getLogName :: T.Text }
+type AskLogName = MonadAsk LogName
+askLogName :: AskLogName m => m T.Text
+askLogName = getLogName <$> askContext
+
 --------------------------------------------------------------------
 
 -- type Logger c m = (AsFacet LogLine c, MonadCommand c m, AskLogLevel m)
@@ -63,43 +68,47 @@ data LogLevel
     | ERROR -- ^ will also print callstack
     deriving (Eq, Show, Read, Ord)
 
-data LogLine = LogLine (IO (Maybe LogLevel)) LogLevel CallStack (IO T.Text)
+-- | allowedLevel logname logLvel callstack msg
+data LogLine = LogLine (IO (Maybe LogLevel)) T.Text LogLevel CallStack (IO T.Text)
 
-instance Show LogLine where
-    showsPrec p (LogLine _ lvl cs _) = showParen (p >= 11) $
-        showString "LogLine " . shows lvl . showString " at " . showString (T.unpack $ prettyCallStack' cs)
+instance ShowIO LogLine where
+    showsPrecIO p (LogLine allowedLvl n lvl cs msg) = showParenIO (p >= 11) $
+        (\allowedLvl' msg' ->
+            "LogLine " <> (T.pack $ show lvl) <> "/" <> (T.pack $ show allowedLvl')
+            <> " " <> n <> " " <> msg' <> " at " <> (prettyCallStack' cs)) <$> allowedLvl <*> msg
 
-logLine :: (AsFacet LogLine c, MonadProgram c m, AskLogLevel m)
+logLine :: (AsFacet LogLine c, MonadProgram c m, AskLogLevel m, AskLogName m)
     => LogLevel -> CallStack -> IO T.Text
     -> m ()
-logLine lvl cs m = do
+logLine lvl cs msg = do
     lvl' <- askLogLevel
-    exec $ LogLine lvl' lvl cs m
+    n <- askLogName
+    exec $ LogLine lvl' n lvl cs msg
 
-logExec :: (ShowIO cmd, AsFacet cmd c, AsFacet LogLine c, MonadProgram c m, AskLogLevel m)
+logExec :: (ShowIO cmd, AsFacet cmd c, AsFacet LogLine c, MonadProgram c m, AskLogLevel m, AskLogName m)
     => LogLevel -> CallStack -> cmd -> m ()
 logExec lvl cs c = do
     logLine lvl cs $ showIO c
     exec c
 
-logExec' :: (ShowIO (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadProgram c m, AskLogLevel m)
+logExec' :: (ShowIO (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadProgram c m, AskLogLevel m, AskLogName m)
     => LogLevel -> CallStack -> cmd c -> m ()
 logExec' lvl cs c = do
     logLine lvl cs $ showIO c
     exec' c
 
-logEval :: (ShowIO cmd, AsFacet cmd c, AsFacet LogLine c, MonadCommand c m, AskLogLevel m)
+logEval :: (ShowIO cmd, AsFacet cmd c, AsFacet LogLine c, MonadCommand c m, AskLogLevel m, AskLogName m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd) -> m a
 logEval lvl cs k = delegatify $ logExec lvl cs . k
 
-logEval' :: (ShowIO (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadCommand c m, AskLogLevel m)
+logEval' :: (ShowIO (cmd c), AsFacet (cmd c) c, AsFacet LogLine c, MonadCommand c m, AskLogLevel m, AskLogName m)
     => LogLevel -> CallStack -> ((a -> c) -> cmd c) -> m a
 logEval' lvl cs k = delegatify $ logExec' lvl cs . k
 
-logInvoke :: (ShowIO (cmd c), AsFacet (cmd c) c, Functor cmd, AsFacet LogLine c, MonadCommand c m, AskLogLevel m)
+logInvoke :: (ShowIO (cmd c), AsFacet (cmd c) c, Functor cmd, AsFacet LogLine c, MonadCommand c m, AskLogLevel m, AskLogName m)
     => LogLevel -> CallStack -> cmd a -> m a
 logInvoke lvl cs c = logEval' lvl cs (<$> c)
 
-logInvoke_ :: (ShowIO (cmd c), AsFacet (cmd c) c, AsFacet [c] c, Functor cmd, AsFacet LogLine c, MonadProgram c m, AskLogLevel m)
+logInvoke_ :: (ShowIO (cmd c), AsFacet (cmd c) c, AsFacet [c] c, Functor cmd, AsFacet LogLine c, MonadProgram c m, AskLogLevel m, AskLogName m)
     => LogLevel -> CallStack -> cmd () -> m ()
 logInvoke_ lvl cs = logExec' lvl cs . fmap command_
