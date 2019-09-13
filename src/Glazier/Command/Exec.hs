@@ -24,19 +24,6 @@ import Data.Proxy
 import Glazier.Command
 import qualified UnliftIO.Async as U
 
--- | type function to get the list of effects in a @cmd@, parameterized over @c@
-type family CmdTypes cmd c :: [Type]
-
--- | A command type that removes the @IO c@ from the @CmdTypes@ of the input @c@
-newtype NoIOCmd c = NoIOCmd { unNoIOCmd :: Which (CmdTypes (NoIOCmd c) (NoIOCmd c)) }
-
--- | Removes the @IO c@ from the @CmdTypes@ of the input @c@
-type instance CmdTypes (NoIOCmd cmd) c = Remove (IO c) (CmdTypes cmd c)
-
--- UndecidableInstances!
-instance (AsFacet a (Which (CmdTypes (NoIOCmd c) (NoIOCmd c)))) => AsFacet a (NoIOCmd c) where
-    facet = iso unNoIOCmd NoIOCmd . facet
-
 -- | Create an executor for a variant in the command type.
 -- returns a tuple with a 'Proxy' to keep track of the the types handled by the executor.
 maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> (Proxy '[a], c -> MaybeT m b)
