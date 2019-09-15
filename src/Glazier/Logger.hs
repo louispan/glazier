@@ -5,8 +5,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Logger where
@@ -60,10 +62,6 @@ type AskLogCallStackDepth = MonadAsk (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth :: AskLogCallStackDepth m => m (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth = askContext
 
-type AskLogName str = MonadAsk (Tagged "LogName" str)
-askLogName :: AskLogName str m => m (Tagged "LogName" str)
-askLogName = askContext
-
 --------------------------------------------------------------------
 
 data LogLevel
@@ -81,19 +79,18 @@ logLevelCallStackDepth INFO_ = Just (Tagged @"LogCallStackDepth" 0)
 logLevelCallStackDepth WARN_ = Just (Tagged @"LogCallStackDepth" 1)
 logLevelCallStackDepth ERROR = Nothing
 
--- | allowedLevel logLevel logname LogId msg callstack
-data LogLine str = LogLine LogLevel (Tagged "LogName" str) (IO str) [(String, SrcLoc)]
+-- | allowedLevel logLevel Id msg callstack
+data LogLine str = LogLine LogLevel (IO str) [(String, SrcLoc)]
 
 instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
-    showsPrecIO p (LogLine lvl n msg cs) = showParenIO (p >= 11) $
+    showsPrecIO p (LogLine lvl msg cs) = showParenIO (p >= 11) $
         (\msg' ->
             (showStr "LogLine ")
             . (showFromStr $ show lvl)
-            . showStr " " . showStr (untag' @"LogName" n) . showStr " "
             . showStr msg'
             . maybe (showStr "") (showStr . (" at " <>)) (prettyCallStack' "; " cs)
         ) <$> msg
-type Logger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m, AskLogName str m)
+type Logger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m)
 
 logLine :: (Logger str c m)
     => Proxy str -> LogLevel -> CallStack -> IO str
@@ -104,11 +101,10 @@ logLine _ lvl cs msg = do
         Nothing -> pure ()
         Just allowedLvl'
             | lvl >= allowedLvl' -> do
-                n <- askLogName
                 d <- askLogCallStackDepth
                 let d' = fromMaybe (logLevelCallStackDepth lvl) d
                     cs' = trimmedCallstack d' $ getCallStack cs
-                exec $ LogLine lvl n msg cs'
+                exec $ LogLine lvl msg cs'
             | otherwise -> pure ()
 
 logExec :: (ShowIO str cmd, Cmd cmd c, Logger str c m)
