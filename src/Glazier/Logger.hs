@@ -1,8 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DefaultSignatures #-}
-{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -14,7 +12,8 @@
 module Glazier.Logger where
 
 import Control.Monad.Context
-import qualified Data.List as DL
+import qualified Data.List as L
+import Data.Maybe
 import Data.Proxy
 import Data.String
 import Data.Tagged.Extras
@@ -30,7 +29,7 @@ import Data.Semigroup
 prettyCallStack' :: (Semigroup str, IsString str) => str -> [(String, SrcLoc)] -> Maybe str
 prettyCallStack' delim cs = case cs of
     [] -> Nothing
-    xs -> Just . foldr (<>) "" . DL.intersperse delim $ prettyCallSite' <$> xs
+    xs -> Just . foldr (<>) "" . L.intersperse delim $ prettyCallSite' <$> xs
 
 trimmedCallstack :: Maybe LogCallStackDepth -> [(String, SrcLoc)] -> [(String, SrcLoc)]
 trimmedCallstack depth cs = maybe cs ((`take` cs) . untag' @"LogCallStackDepth") depth
@@ -40,7 +39,7 @@ prettyCallSite' (f, loc) = fromString f <> "@" <> prettySrcLoc' loc
 
 prettySrcLoc' :: (Semigroup str, IsString str) => SrcLoc -> str
 prettySrcLoc' SrcLoc {..}
-    = foldr (<>) "" $ DL.intersperse ":"
+    = foldr (<>) "" $ L.intersperse ":"
         [ fromString srcLocModule
         , fromString $ show srcLocStartLine
         , fromString $ show srcLocStartCol
@@ -61,9 +60,8 @@ type AskLogCallStackDepth = MonadAsk (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth :: AskLogCallStackDepth m => m (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth = askContext
 
-type LogName str = Tagged "LogName" str
-type AskLogName str = MonadAsk (LogName str)
-askLogName :: AskLogName str m => m (LogName str)
+type AskLogName str = MonadAsk (Tagged "LogName" str)
+askLogName :: AskLogName str m => m (Tagged "LogName" str)
 askLogName = askContext
 
 --------------------------------------------------------------------
@@ -83,15 +81,16 @@ logLevelCallStackDepth INFO_ = Just (Tagged @"LogCallStackDepth" 0)
 logLevelCallStackDepth WARN_ = Just (Tagged @"LogCallStackDepth" 1)
 logLevelCallStackDepth ERROR = Nothing
 
--- | allowedLevel logLevel logname msg callstack
-data LogLine str = LogLine LogLevel (LogName str) (IO str) [(String, SrcLoc)]
+-- | allowedLevel logLevel logname LogId msg callstack
+data LogLine str = LogLine LogLevel (Tagged "LogName" str) (IO str) [(String, SrcLoc)]
 
 instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
     showsPrecIO p (LogLine lvl n msg cs) = showParenIO (p >= 11) $
         (\msg' ->
             (showStr "LogLine ")
             . (showFromStr $ show lvl)
-            . showStr " " . showStr (untag n) . showStr " " . showStr msg'
+            . showStr " " . showStr (untag' @"LogName" n) . showStr " "
+            . showStr msg'
             . maybe (showStr "") (showStr . (" at " <>)) (prettyCallStack' "; " cs)
         ) <$> msg
 type Logger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m, AskLogName str m)
@@ -107,9 +106,7 @@ logLine _ lvl cs msg = do
             | lvl >= allowedLvl' -> do
                 n <- askLogName
                 d <- askLogCallStackDepth
-                let d' = case d of
-                        Nothing -> logLevelCallStackDepth lvl
-                        Just d'' -> d''
+                let d' = fromMaybe (logLevelCallStackDepth lvl) d
                     cs' = trimmedCallstack d' $ getCallStack cs
                 exec $ LogLine lvl n msg cs'
             | otherwise -> pure ()

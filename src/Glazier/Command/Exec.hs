@@ -39,7 +39,7 @@ infixl 3 `orExec` -- like <|>
 fixExec :: Functor m => ((c -> m ()) -> c -> MaybeT m ()) -> c -> m ()
 fixExec fexec = (`evalMaybeT` ()) . fexec (fixExec fexec)
 
--- | A variation of 'fixExec' for executors that return cmds that should be evaluated last
+-- | A variation of 'fixExec' for executors that return cmds that should be evaluated next
 fixExec' :: Monad m => ((c -> m ()) -> c -> MaybeT m [c]) -> c -> m ()
 fixExec' fexec c = do
     let execCmd = (`evalMaybeT` []) . fexec (fixExec' fexec) -- c -> MaybeT m [c]
