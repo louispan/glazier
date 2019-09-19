@@ -15,38 +15,14 @@
 module Glazier.Logger where
 
 import Control.Monad.Context
-import qualified Data.List as L
+import Data.Coerce
 import Data.Maybe
 import Data.String
 import Data.Tagged.Extras
 import GHC.Stack
+import GHC.Stack.Extras
 import Glazier.Command
 import Glazier.ShowIO
-import GHC.Stack.Extras
-
-#if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
-import Data.Semigroup
-#endif
-
--- Based on 'GHC.Stack.prettyCallstack'
-prettyCallStack' :: (Semigroup str, IsString str) => str -> [(String, SrcLoc)] -> Maybe str
-prettyCallStack' delim cs = case cs of
-    [] -> Nothing
-    xs -> Just . foldr (<>) "" . L.intersperse delim $ prettyCallSite' <$> xs
-
-trimmedCallstack :: Maybe LogCallStackDepth -> [(String, SrcLoc)] -> [(String, SrcLoc)]
-trimmedCallstack depth cs = maybe cs ((`take` cs) . untag' @"LogCallStackDepth") depth
-
-prettyCallSite' :: (Semigroup str, IsString str) => (String, SrcLoc) -> str
-prettyCallSite' (f, loc) = fromString f <> "@" <> prettySrcLoc' loc
-
-prettySrcLoc' :: (Semigroup str, IsString str) => SrcLoc -> str
-prettySrcLoc' SrcLoc {..}
-    = foldr (<>) "" $ L.intersperse ":"
-        [ fromString srcLocModule
-        , fromString $ show srcLocStartLine
-        , fromString $ show srcLocStartCol
-        ]
 
 --------------------------------------------------------------------
 
@@ -73,12 +49,12 @@ data LogLevel
     | ERROR -- ^ will also print callstack
     deriving (Eq, Show, Read, Ord)
 
-defaultLogCallStackDepth :: LogLevel -> Maybe LogCallStackDepth
-defaultLogCallStackDepth TRACE = Nothing
-defaultLogCallStackDepth DEBUG = Just (Tagged @"LogCallStackDepth" 1)
-defaultLogCallStackDepth INFO_ = Just (Tagged @"LogCallStackDepth" 0)
-defaultLogCallStackDepth WARN_ = Just (Tagged @"LogCallStackDepth" 1)
-defaultLogCallStackDepth ERROR = Nothing
+basicLogCallStackDepth :: LogLevel -> Maybe LogCallStackDepth
+basicLogCallStackDepth TRACE = Nothing
+basicLogCallStackDepth DEBUG = Just (Tagged @"LogCallStackDepth" 1)
+basicLogCallStackDepth INFO_ = Just (Tagged @"LogCallStackDepth" 0)
+basicLogCallStackDepth WARN_ = Just (Tagged @"LogCallStackDepth" 1)
+basicLogCallStackDepth ERROR = Nothing
 
 -- | allowedLevel logLevel Id msg callstack
 data LogLine str = LogLine [(String, SrcLoc)] LogLevel (IO str)
@@ -109,6 +85,6 @@ logLine f lvl msg = withoutCallStack $ do
             | lvl >= allowedLvl' -> do
                 d <- askLogCallStackDepth
                 let d' = fromMaybe (f lvl) d
-                    cs' = trimmedCallstack d' $ getCallStack callStack
+                    cs' = trimmedCallstack (coerce d') $ getCallStack callStack
                 exec $ LogLine cs' lvl msg
             | otherwise -> pure ()
