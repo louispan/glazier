@@ -10,7 +10,6 @@
 
 module Glazier.Command.Exec where
 
-import Data.Kind
 import Control.Applicative
 import Control.Lens
 import Control.Monad.IO.Unlift

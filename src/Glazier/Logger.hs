@@ -6,6 +6,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -16,12 +17,12 @@ module Glazier.Logger where
 import Control.Monad.Context
 import qualified Data.List as L
 import Data.Maybe
-import Data.Proxy
 import Data.String
 import Data.Tagged.Extras
 import GHC.Stack
 import Glazier.Command
 import Glazier.ShowIO
+import GHC.Stack.Extras
 
 #if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
 import Data.Semigroup
@@ -72,18 +73,18 @@ data LogLevel
     | ERROR -- ^ will also print callstack
     deriving (Eq, Show, Read, Ord)
 
-logLevelCallStackDepth :: LogLevel -> Maybe LogCallStackDepth
-logLevelCallStackDepth TRACE = Nothing
-logLevelCallStackDepth DEBUG = Just (Tagged @"LogCallStackDepth" 1)
-logLevelCallStackDepth INFO_ = Just (Tagged @"LogCallStackDepth" 0)
-logLevelCallStackDepth WARN_ = Just (Tagged @"LogCallStackDepth" 1)
-logLevelCallStackDepth ERROR = Nothing
+defaultLogCallStackDepth :: LogLevel -> Maybe LogCallStackDepth
+defaultLogCallStackDepth TRACE = Nothing
+defaultLogCallStackDepth DEBUG = Just (Tagged @"LogCallStackDepth" 1)
+defaultLogCallStackDepth INFO_ = Just (Tagged @"LogCallStackDepth" 0)
+defaultLogCallStackDepth WARN_ = Just (Tagged @"LogCallStackDepth" 1)
+defaultLogCallStackDepth ERROR = Nothing
 
 -- | allowedLevel logLevel Id msg callstack
-data LogLine str = LogLine LogLevel (IO str) [(String, SrcLoc)]
+data LogLine str = LogLine [(String, SrcLoc)] LogLevel (IO str)
 
 instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
-    showsPrecIO p (LogLine lvl msg cs) = showParenIO (p >= 11) $
+    showsPrecIO p (LogLine cs lvl msg) = showParenIO (p >= 11) $
         (\msg' ->
             (showStr "LogLine ")
             . (showFromStr $ show lvl)
@@ -92,45 +93,22 @@ instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
         ) <$> msg
 type Logger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m)
 
-logLine :: (Logger str c m)
-    => Proxy str -> LogLevel -> CallStack -> IO str
+-- logged :: (HasCallStack => Monad m, ShowIO str a) => (HasCallStack => LogLevel -> IO str -> m ()) -> (a -> m b) -> LogLevel -> a -> m b
+-- logged logLn go lvl a = withoutCallStack $ do
+--     logLn lvl (showIO a)
+--     go a
+
+logLine :: (HasCallStack, Logger str c m)
+    => (LogLevel -> Maybe LogCallStackDepth) -> LogLevel -> IO str
     -> m ()
-logLine _ lvl cs msg = do
+logLine f lvl msg = withoutCallStack $ do
     allowedLevel <- askLogLevel
     case allowedLevel of
         Nothing -> pure ()
         Just allowedLvl'
             | lvl >= allowedLvl' -> do
                 d <- askLogCallStackDepth
-                let d' = fromMaybe (logLevelCallStackDepth lvl) d
-                    cs' = trimmedCallstack d' $ getCallStack cs
-                exec $ LogLine lvl msg cs'
+                let d' = fromMaybe (f lvl) d
+                    cs' = trimmedCallstack d' $ getCallStack callStack
+                exec $ LogLine cs' lvl msg
             | otherwise -> pure ()
-
-logExec :: (ShowIO str cmd, Cmd cmd c, Logger str c m)
-    => Proxy str -> LogLevel -> CallStack -> cmd -> m ()
-logExec p lvl cs c = do
-    logLine p lvl cs $ showIO c
-    exec c
-
-logExec' :: (ShowIO str (cmd c), Cmd' cmd c, Logger str c m)
-    => Proxy str -> LogLevel -> CallStack -> cmd c -> m ()
-logExec' p lvl cs c = do
-    logLine p lvl cs $ showIO c
-    exec' c
-
-logEval :: (ShowIO str cmd, Cmd cmd c, Logger str c m)
-    => Proxy str -> LogLevel -> CallStack -> ((a -> c) -> cmd) -> m a
-logEval p lvl cs k = delegatify $ logExec p lvl cs . k
-
-logEval' :: (ShowIO str (cmd c), Cmd' cmd c, Logger str c m)
-    => Proxy str -> LogLevel -> CallStack -> ((a -> c) -> cmd c) -> m a
-logEval' p lvl cs k = delegatify $ logExec' p lvl cs . k
-
-logInvoke :: (ShowIO str (cmd c), Cmd' cmd c, Functor cmd, Logger str c m)
-    => Proxy str -> LogLevel -> CallStack -> cmd a -> m a
-logInvoke p lvl cs c = logEval' p lvl cs (<$> c)
-
-logInvoke_ :: (ShowIO str (cmd c), Cmd' cmd c, Cmd' [] c, Functor cmd, Logger str c m)
-    => Proxy str -> LogLevel -> CallStack -> cmd () -> m ()
-logInvoke_ p lvl cs = logExec' p lvl cs . fmap command_

@@ -33,16 +33,16 @@ module Glazier.Command
     , execProgram
     , execProgramT'
     , execProgram'
+    , delegatify
     , exec
     , exec'
-    , delegatify
     , eval
-    , eval'
-    , invoke
-    , invoke_
+    -- , eval_
+    -- , invoke
+    -- , invoke_
     , sequentially
     , concurringly
-    , concurringly_
+    -- , concurringly_
     -- | NB. Don't export NonBlocking constructor to guarantee
     -- that that it only contains non-blocking IO.
     , NonBlocking
@@ -52,13 +52,11 @@ module Glazier.Command
     , CmdConcur
     ) where
 
-
 import Control.Also
 import Control.Applicative
 import Control.Lens
 import Control.Monad.Cont
 import Control.Monad.Delegate
-import Control.Monad.IO.Class
 import Control.Monad.Morph
 import Control.Monad.Reader
 import Control.Monad.Trans.Cont
@@ -289,21 +287,6 @@ instance (MonadDelegate m, MonadCodify c m) => MonadCodify c (ExceptT e m) where
 instance MonadProgram c m => MonadProgram c (ExceptT e m) where
     instruct = lift . instruct
 
-
--- | @'exec' = 'instruct' . 'command'@
---
--- 'exec', 'exec'', 'defer', 'eval', 'eval'', 'eval'''
--- can be used inside an 'evalContT' or 'concurringly'.
--- If it is inside a 'evalContT' then the command is evaluated sequentially.
--- If it is inside a 'concurringly', then the command is evaluated concurrently
--- with other commands.
-exec :: (MonadProgram c m, Cmd cmd c) => cmd -> m ()
-exec = instruct . command
-
--- | @'exec'' = 'instruct' . 'command''@
-exec' :: (MonadProgram c m, Cmd' cmd c) => cmd c -> m ()
-exec' = instruct . command'
-
 -- | Uses 'delegate' and 'codify' together.
 -- Uses 'delegate' to get the @a -> m()@ handler
 -- and 'codify' to convert the handler to a command form @a -> c@.
@@ -323,42 +306,57 @@ delegatify m = delegate $ \k -> do
     f <- codify k
     m f
 
--- | Convert a command that needs a handler for @a@
--- into a `MonadCommand` that fires @a@
-eval ::
-    ( MonadCommand c m
-    , Cmd cmd c
-    )
-    => ((a -> c) -> cmd) -> m a
-eval k = delegatify $ exec . k
+-- | @'exec' = 'instruct' . 'command'@
+--
+-- 'exec', 'exec'', 'defer', 'eval', 'eval'', 'eval'''
+-- can be used inside an 'evalContT' or 'concurringly'.
+-- If it is inside a 'evalContT' then the command is evaluated sequentially.
+-- If it is inside a 'concurringly', then the command is evaluated concurrently
+-- with other commands.
+exec :: (MonadProgram c m, Cmd cmd c) => cmd -> m ()
+exec = instruct . command
 
--- | Convert a command that needs a handler for @a@
--- into a `MonadCommand` that fires @a@
-eval' ::
-    ( MonadCommand c m
-    , Cmd' cmd c
-    )
-    => ((a -> c) -> cmd c) -> m a
-eval' k = delegatify $ exec' . k
+-- | @'exec'' = 'instruct' . 'command''@
+exec' :: (MonadProgram c m, Cmd' cmd c) => cmd c -> m ()
+exec' = instruct . command'
+
+-- -- | Convert a command that needs a handler for @a@
+-- -- into a `MonadCommand` that fires @a@
+-- eval ::
+--     ( MonadCommand c m
+--     , Cmd cmd c
+--     )
+--     => ((a -> c) -> cmd) -> m a
+-- eval k = delegatify $ exec . k
+
+-- -- | Convert a command that needs a handler for @a@
+-- -- into a `MonadCommand` that fires @a@
+-- eval' ::
+--     ( MonadCommand c m
+--     , Cmd' cmd c
+--     )
+--     => ((a -> c) -> cmd c) -> m a
+-- eval' k = delegatify $ exec' . k
 
 -- | Convert a functor into a 'MonadCommand' that fires an @a@
-invoke ::
+-- This requires @cmd@ to be a 'Functor'
+eval ::
     ( MonadCommand c m
     , Cmd' cmd c
     , Functor cmd
     )
     => cmd a -> m a
-invoke c = eval' (<$> c)
+eval c = delegatify $ exec' . (<$> c)
 
--- A simpler variation of 'invoke' that only requires a @MonadProgram c m@
-invoke_ ::
-    ( MonadProgram c m
-    , Cmd' cmd c
-    , Cmd' [] c
-    , Functor cmd
-    )
-    => cmd () -> m ()
-invoke_ = exec' . fmap command_
+-- -- A simpler variation of 'invoke' that only requires a @MonadProgram c m@
+-- eval_ ::
+--     ( MonadProgram c m
+--     , Cmd' cmd c
+--     , Cmd' [] c
+--     , Functor cmd
+--     )
+--     => cmd () -> m ()
+-- eval_ = exec' . fmap command_
 
 -- | Adds a 'MonadCont' constraint. It is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack,
@@ -383,13 +381,13 @@ concurringly ::
     ( MonadCommand c m
     , CmdConcur c
     ) => Concur c a -> m a
-concurringly = invoke
+concurringly = eval
 
--- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
--- A simpler variation of 'concurringly' that only requires a @MonadProgram c m@
--- This is 'invoke_' type constrained to @Concur c ()@
-concurringly_ :: (MonadProgram c m, CmdConcur c) => Concur c () -> m ()
-concurringly_ = invoke_
+-- -- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
+-- -- A simpler variation of 'concurringly' that only requires a @MonadProgram c m@
+-- -- This is 'invoke_' type constrained to @Concur c ()@
+-- concurringly_ :: (MonadProgram c m, CmdConcur c) => Concur c () -> m ()
+-- concurringly_ = eval_
 
 data ConcurResult a
     = ConcurRead (NonBlocking IO [a]) -- read all the values from a TQueue
