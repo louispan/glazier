@@ -1,12 +1,12 @@
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 
 module Glazier.Command.Exec where
 
@@ -14,8 +14,8 @@ import Control.Applicative
 import Control.Lens
 import Control.Monad.IO.Unlift
 import Control.Monad.State.Strict
-import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Extras
+import Control.Monad.Trans.Maybe
 import Data.Diverse.Lens
 import qualified Data.DList as DL
 import Data.Foldable

@@ -19,7 +19,6 @@ import Data.Coerce
 import Data.Maybe
 import Data.String
 import Data.Tagged.Extras
-import GHC.Stack
 import GHC.Stack.Extras
 import Glazier.Command
 import Glazier.ShowIO
