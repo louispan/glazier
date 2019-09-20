@@ -56,6 +56,9 @@ showParenIO True x = (\y -> showStr "(" . y . showStr ")") <$> x
 showsIO :: (ShowIO str a) => a -> IO (ShowStr str)
 showsIO = showsPrecIO 0
 
+showsStr :: (IsString str, Semigroup str, Show a) => a -> ShowStr str
+showsStr = showFromStr . show
+
 -- | utility function converting a 'String' to a show function that
 -- simply prepends the string unchanged.
 showStr :: Semigroup str => str -> ShowStr str
