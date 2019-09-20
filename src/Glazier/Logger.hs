@@ -55,7 +55,8 @@ basicLogCallStackDepth INFO_ = Just (Tagged @"LogCallStackDepth" 0)
 basicLogCallStackDepth WARN_ = Just (Tagged @"LogCallStackDepth" 1)
 basicLogCallStackDepth ERROR = Nothing
 
--- | allowedLevel logLevel Id msg callstack
+-- | callstack logLevel msg
+-- The IO must be benign (might never the called or called multiple times).
 data LogLine str = LogLine [(String, SrcLoc)] LogLevel (IO str)
 
 instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
@@ -66,14 +67,10 @@ instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
             . showStr msg'
             . maybe (showStr "") (showStr . (" at " <>)) (prettyCallStack' "; " cs)
         ) <$> msg
-type Logger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m)
 
--- logged :: (HasCallStack => Monad m, ShowIO str a) => (HasCallStack => LogLevel -> IO str -> m ()) -> (a -> m b) -> LogLevel -> a -> m b
--- logged logLn go lvl a = withoutCallStack $ do
---     logLn lvl (showIO a)
---     go a
+type MonadLogger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m)
 
-logLine :: (HasCallStack, Logger str c m)
+logLine :: (HasCallStack, MonadLogger str c m)
     => (LogLevel -> Maybe LogCallStackDepth) -> LogLevel -> IO str
     -> m ()
 logLine f lvl msg = withoutCallStack $ do
