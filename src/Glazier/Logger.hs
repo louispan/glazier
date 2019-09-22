@@ -21,7 +21,7 @@ import Data.String
 import Data.Tagged.Extras
 import GHC.Stack.Extras
 import Glazier.Command
-import Glazier.ShowIO
+import ShowIO
 
 --------------------------------------------------------------------
 

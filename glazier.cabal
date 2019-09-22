@@ -20,7 +20,6 @@ library
                        Glazier.Command.Exec
                        Glazier.Command.Internal
                        Glazier.Logger
-                       Glazier.ShowIO
                       --  Glazier.Logger.Exec
   build-depends:       base >= 4.7 && < 5
                      , alternators >= 2.0
