@@ -1,17 +1,17 @@
+cabal-version:       2.2
 name:                glazier
 version:             2.0.0.0
 synopsis:            Extensible effects using ContT, State and variants.
 description:         Interpreting commmands with extensible effects using Cont/Concur monad, State, and variants.
 homepage:            https://github.com/louispan/glazier#readme
-license:             BSD3
+license:             BSD-3-Clause
 license-file:        LICENSE
 author:              Louis Pan
 maintainer:          louis@pan.me
-copyright:           2016 Louis Pan
+copyright:           2019 Louis Pan
 category:            GUI
 build-type:          Simple
-cabal-version:       >=1.10
-tested-with:         GHC == 8.4.1
+tested-with:         GHC == 8.6.5
 
 
 library
@@ -61,8 +61,6 @@ test-suite glazier-test
                      , unliftio-core >= 0.1
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N -Wall
   default-language:    Haskell2010
-  if flag(Debug)
-    cpp-options:     -DDEBUGIO
 
 source-repository head
   type:     git
