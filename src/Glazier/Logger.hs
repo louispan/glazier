@@ -16,12 +16,32 @@ module Glazier.Logger where
 
 import Control.Monad.Context
 import Data.Coerce
+import qualified Data.List as L
 import Data.Maybe
 import Data.String
 import Data.Tagged.Extras
-import GHC.Stack.Extras
+import GHC.Stack
 import Glazier.Command
-import ShowIO
+
+-- Based on 'GHC.Stack.prettyCallstack'
+prettyCallStack' :: (Semigroup str, IsString str) => str -> [(String, SrcLoc)] -> Maybe str
+prettyCallStack' delim cs = case cs of
+    [] -> Nothing
+    xs -> Just . foldr (<>) "" . L.intersperse delim $ prettyCallSite' <$> xs
+
+trimmedCallstack :: Maybe Int -> [(String, SrcLoc)] -> [(String, SrcLoc)]
+trimmedCallstack depth cs = maybe cs (`take` cs) depth
+
+prettyCallSite' :: (Semigroup str, IsString str) => (String, SrcLoc) -> str
+prettyCallSite' (f, loc) = fromString f <> "@" <> prettySrcLoc' loc
+
+prettySrcLoc' :: (Semigroup str, IsString str) => SrcLoc -> str
+prettySrcLoc' SrcLoc {..}
+    = foldr (<>) "" $ L.intersperse ":"
+        [ fromString srcLocModule
+        , fromString $ show srcLocStartLine
+        , fromString $ show srcLocStartCol
+        ]
 
 --------------------------------------------------------------------
 
@@ -59,21 +79,21 @@ basicLogCallStackDepth ERROR = Nothing
 -- The IO must be benign (might never the called or called multiple times).
 data LogLine str = LogLine [(String, SrcLoc)] LogLevel (IO str)
 
-instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
-    showsPrecIO p (LogLine cs lvl msg) = showParenIO (p >= 11) $
-        (\msg' ->
-            (showStr "LogLine ")
-            . (showFromStr $ show lvl)
-            . showStr msg'
-            . maybe (showStr "") (showStr . (" at " <>)) (prettyCallStack' "; " cs)
-        ) <$> msg
+-- instance (Semigroup str, IsString str) => ShowIO str (LogLine str) where
+--     showsPrecIO p (LogLine cs lvl msg) = showParenIO (p >= 11) $
+--         (\msg' ->
+--             (showStr "LogLine ")
+--             . (showFromStr $ show lvl)
+--             . showStr msg'
+--             . maybe (showStr "") (showStr . (" at " <>)) (prettyCallStack' "; " cs)
+--         ) <$> msg
 
 type MonadLogger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m)
 
 logLine :: (HasCallStack, MonadLogger str c m)
     => (LogLevel -> Maybe LogCallStackDepth) -> LogLevel -> IO str
     -> m ()
-logLine f lvl msg = withoutCallStack $ do
+logLine f lvl msg = withFrozenCallStack $ do
     allowedLevel <- askLogLevel
     case allowedLevel of
         Nothing -> pure ()
