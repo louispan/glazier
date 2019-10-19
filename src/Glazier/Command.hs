@@ -13,10 +13,12 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Glazier.Command
-    ( MonadProgram(..)
+    ( Command
+    , MonadProgram(..)
     , Cmd
     , Cmd'
     , command
@@ -70,8 +72,8 @@ import Control.Monad.Trans.Writer.Strict as Strict
 import Control.Newtype.Generics
 import Data.Diverse.Lens
 import qualified Data.DList as DL
-import Glazier.Command.Internal
 import qualified GHC.Generics as G
+import Glazier.Command.Internal
 
 #if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
 import Data.Semigroup
@@ -83,11 +85,16 @@ import Data.Semigroup
 type Cmd a c = AsFacet a c
 type Cmd' f c = AsFacet (f c) c
 
+type family Command m where
+    Command (ProgramT c m) = c
+    Command (Concur c) = c
+    Command (t m) = Command m
+
 -- | Monad that can be added instructions of commands.
 -- To extract the command see 'MonadCodify'
-class Monad m => MonadProgram c m | m -> c where
+class Monad m => MonadProgram m where
     -- | Add a command to the program
-    instruct :: c -> m ()
+    instruct :: Command m -> m ()
 
 -- | convert a request type to a command type.
 -- This is used for commands that doesn't have a continuation.
@@ -120,19 +127,19 @@ commands xs = command' xs
 -- | Converts a handler that result in 'MonadProgram'
 -- to a handler that result in a command, using the current monad context.
 -- This is used to extract out the command in a 'MonadProgram'.
-class Monad m => MonadCodify c m | m -> c where
-    codify :: (a -> m ()) -> m (a -> c)
+class Monad m => MonadCodify m where
+    codify :: (a -> m ()) -> m (a -> Command m)
 
 -- | Variation of 'codify' to transform the monad stack instead of a handler.
-codify' :: (MonadCodify c m) => m () -> m c
+codify' :: (MonadCodify m) => m () -> m (Command m)
 codify' m = do
     f <- codify (const m)
     pure (f ())
 
-type MonadCommand c m =
-    ( MonadProgram c m
+type MonadCommand m =
+    ( MonadProgram m
     , MonadDelegate m
-    , MonadCodify c m
+    , MonadCodify m
     )
 
 -- | A monad transformer with a instance of 'MonadProgram'.
@@ -202,79 +209,79 @@ instance (Semigroup (m a), Monad m) => Semigroup (ProgramT c m a) where
 -- | Instance that does real work by running the State of commands with mempty.
 -- Essentially a Writer monad, but using a State monad so it can be
 -- used inside a ContT which only has an instance for MonadState.
-instance {-# OVERLAPPING #-} Cmd' [] c => MonadCodify c (ProgramT c Identity) where
+instance {-# OVERLAPPING #-} (Cmd' [] c) => MonadCodify (ProgramT c Identity) where
     codify f = pure $ commands . DL.toList . execProgram' . f
 
 -- | 'ProgramT' is an instance of codify if the innner monad is a 'command''
-instance {-# OVERLAPPABLE #-} (Monad m, Cmd' m c, Cmd' [] c) => MonadCodify c (ProgramT c m) where
+instance {-# OVERLAPPABLE #-} (Monad m, Cmd' m c, Cmd' [] c) => MonadCodify (ProgramT c m) where
     codify f = pure $ command' . (fmap (commands . DL.toList)) . execProgramT' . f
 
-instance Monad m => MonadProgram c (ProgramT c m) where
+instance Monad m => MonadProgram (ProgramT c m) where
     instruct c = ProgramT $ Strict.runStateT $ Strict.modify' (`DL.snoc` c)
 
 -- | Passthrough instance
-instance (MonadCodify c m) => MonadCodify c (Strict.StateT s m) where
+instance (MonadCodify m) => MonadCodify (Strict.StateT s m) where
     codify f = do
         s <- Strict.get
         lift $ codify $ \a -> (`Strict.evalStateT` s) $ f a
 
-instance MonadProgram c m => MonadProgram c (Strict.StateT s m) where
+instance MonadProgram m => MonadProgram (Strict.StateT s m) where
     instruct = lift . instruct
 
 -- | Passthrough instance
-instance MonadCodify c m => MonadCodify c (Lazy.StateT s m) where
+instance MonadCodify m => MonadCodify (Lazy.StateT s m) where
     codify f = do
         s <- Lazy.get
         lift $ codify $ \a -> (`Lazy.evalStateT` s) $ f a
 
-instance MonadProgram c m => MonadProgram c (Lazy.StateT s m) where
+instance MonadProgram m => MonadProgram (Lazy.StateT s m) where
     instruct = lift . instruct
 
 -- | Passthrough instance
-instance MonadCodify c m => MonadCodify c (IdentityT m) where
+instance MonadCodify m => MonadCodify (IdentityT m) where
     codify f = lift . codify $ runIdentityT . f
 
-instance MonadProgram c m => MonadProgram c (IdentityT m) where
+instance MonadProgram m => MonadProgram (IdentityT m) where
     instruct = lift . instruct
 
 -- | Passthrough instance
-instance MonadCodify c m => MonadCodify c (ContT () m) where
+instance MonadCodify m => MonadCodify (ContT () m) where
     codify f = lift . codify $ evalContT . f
 
-instance MonadProgram c m => MonadProgram c (ContT a m) where
+instance MonadProgram m => MonadProgram (ContT a m) where
     instruct = lift . instruct
 
 -- | Passthrough instance, using the Reader context
-instance MonadCodify c m => MonadCodify c (ReaderT r m) where
+instance MonadCodify m => MonadCodify (ReaderT r m) where
     codify f = do
         r <- ask
         lift . codify $ (`runReaderT` r) . f
 
-instance MonadProgram c m => MonadProgram c (ReaderT r m) where
+instance MonadProgram m => MonadProgram (ReaderT r m) where
     instruct = lift . instruct
 
-instance (Monoid w, MonadCodify c m) => MonadCodify c (Lazy.WriterT w m) where
+instance (Monoid w, MonadCodify m) => MonadCodify (Lazy.WriterT w m) where
     codify f = lift . codify $ fmap fst . Lazy.runWriterT . f
 
-instance (Monoid w, MonadProgram c m) => MonadProgram c (Lazy.WriterT w m) where
+instance (Monoid w, MonadProgram m) => MonadProgram (Lazy.WriterT w m) where
     instruct = lift . instruct
 
-instance (Monoid w, MonadCodify c m) => MonadCodify c (Strict.WriterT w m) where
+instance (Monoid w, MonadCodify m) => MonadCodify (Strict.WriterT w m) where
     codify f = lift . codify $ fmap fst . Strict.runWriterT . f
 
-instance (Monoid w, MonadProgram c m) => MonadProgram c (Strict.WriterT w m) where
+instance (Monoid w, MonadProgram m) => MonadProgram (Strict.WriterT w m) where
     instruct = lift . instruct
 
 -- | Passthrough instance, ignoring that the handler result might be Nothing.
-instance MonadCodify c m => MonadCodify c (MaybeT m) where
+instance MonadCodify m => MonadCodify (MaybeT m) where
     codify f = lift . codify $ void . runMaybeT . f
 
-instance MonadProgram c m => MonadProgram c (MaybeT m) where
+instance MonadProgram m => MonadProgram (MaybeT m) where
     instruct = lift . instruct
 
 -- | Passthrough instance which requires the inner monad to be a 'MonadDelegate'.
 -- This means that the @Left e@ case can be handled by the provided delegate.
-instance (MonadDelegate m, MonadCodify c m) => MonadCodify c (ExceptT e m) where
+instance (MonadDelegate m, MonadCodify m) => MonadCodify (ExceptT e m) where
     codify f = ExceptT $ delegate $ \kec -> do
         let g a = do
                 e <- runExceptT $ f a
@@ -284,7 +291,7 @@ instance (MonadDelegate m, MonadCodify c m) => MonadCodify c (ExceptT e m) where
         g' <- codify g
         kec (Right g')
 
-instance MonadProgram c m => MonadProgram c (ExceptT e m) where
+instance MonadProgram m => MonadProgram (ExceptT e m) where
     instruct = lift . instruct
 
 -- | Uses 'delegate' and 'codify' together.
@@ -299,9 +306,9 @@ instance MonadProgram c m => MonadProgram c (ExceptT e m) where
 -- contrast this type with @'delegate' :: ((a -> m ()) -> m ()) -> m a@
 delegatify ::
     ( MonadDelegate m
-    , MonadCodify c m
+    , MonadCodify m
     )
-    => ((a -> c) -> m ()) -> m a
+    => ((a -> Command m) -> m ()) -> m a
 delegatify m = delegate $ \k -> do
     f <- codify k
     m f
@@ -313,11 +320,11 @@ delegatify m = delegate $ \k -> do
 -- If it is inside a 'evalContT' then the command is evaluated sequentially.
 -- If it is inside a 'concurringly', then the command is evaluated concurrently
 -- with other commands.
-exec :: (MonadProgram c m, Cmd cmd c) => cmd -> m ()
+exec :: (MonadProgram m, Cmd cmd (Command m)) => cmd -> m ()
 exec = instruct . command
 
 -- | @'exec'' = 'instruct' . 'command''@
-exec' :: (MonadProgram c m, Cmd' cmd c) => cmd c -> m ()
+exec' :: (MonadProgram m, Cmd' cmd (Command m)) => cmd (Command m) -> m ()
 exec' = instruct . command'
 
 -- -- | Convert a command that needs a handler for @a@
@@ -341,8 +348,8 @@ exec' = instruct . command'
 -- | Convert a functor into a 'MonadCommand' that fires an @a@
 -- This requires @cmd@ to be a 'Functor'
 eval ::
-    ( MonadCommand c m
-    , Cmd' cmd c
+    ( MonadCommand m
+    , Cmd' cmd (Command m)
     , Functor cmd
     )
     => cmd a -> m a
@@ -378,9 +385,9 @@ sequentially = id
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c a@
 -- This is 'invoke' type constrained to @Concur c a@
 concurringly ::
-    ( MonadCommand c m
-    , CmdConcur c
-    ) => Concur c a -> m a
+    ( MonadCommand m
+    , CmdConcur (Command m)
+    ) => Concur (Command m) a -> m a
 concurringly = eval
 
 -- -- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
@@ -464,13 +471,13 @@ instance (CmdConcur c) => Monad (Concur c) where
                 pure $ ConcurRead recv
 
 -- | The monad @Concur c c@ itself is a command @c@, so an instance of @MonadCodify@ canbe made
-instance CmdConcur c => MonadCodify c (Concur c) where
+instance CmdConcur c => MonadCodify (Concur c) where
     codify f = pure $
          command' -- a -> c
          . fmap command_ -- a -> Concur c c
          . f -- a -> Concur c ()
 
-instance CmdConcur c => MonadProgram c (Concur c) where
+instance CmdConcur c => MonadProgram (Concur c) where
     instruct = Concur . fmap ConcurPure . instruct
 
 -- | This instance makes usages of 'eval'' concurrent when used

@@ -88,9 +88,9 @@ data LogLine str = LogLine [(String, SrcLoc)] LogLevel (IO str)
 --             . maybe (showStr "") (showStr . (" at " <>)) (prettyCallStack' "; " cs)
 --         ) <$> msg
 
-type MonadLogger str c m = (Cmd (LogLine str) c, MonadCommand c m, AskLogCallStackDepth m, AskLogLevel m)
+type MonadLogger str m = (Cmd (LogLine str) (Command m), MonadCommand m, AskLogCallStackDepth m, AskLogLevel m)
 
-logLine :: (HasCallStack, MonadLogger str c m)
+logLine :: (HasCallStack, MonadLogger str m)
     => (LogLevel -> Maybe LogCallStackDepth) -> LogLevel -> IO str
     -> m ()
 logLine f lvl msg = withFrozenCallStack $ do
