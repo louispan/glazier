@@ -14,7 +14,7 @@
 
 module Glazier.Logger where
 
-import Control.Monad.Context
+import Control.Monad.Environ
 import Data.Coerce
 import qualified Data.List as L
 import Data.Maybe
@@ -48,7 +48,7 @@ prettySrcLoc' SrcLoc {..}
 -- | Nothing means do not log, else it has the allowed log level
 type AskLogLevel = MonadAsk (Maybe LogLevel)
 askLogLevel :: AskLogLevel m => m (Maybe LogLevel)
-askLogLevel = askContext
+askLogLevel = askEnviron
 
 type LogCallStackDepth = Tagged "LogCallStackDepth" Int
 -- | Nothing means don't change default callstack depth,
@@ -56,7 +56,7 @@ type LogCallStackDepth = Tagged "LogCallStackDepth" Int
 -- else limit by the depth
 type AskLogCallStackDepth = MonadAsk (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth :: AskLogCallStackDepth m => m (Maybe (Maybe LogCallStackDepth))
-askLogCallStackDepth = askContext
+askLogCallStackDepth = askEnviron
 
 --------------------------------------------------------------------
 
