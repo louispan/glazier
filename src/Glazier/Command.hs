@@ -29,13 +29,16 @@ module Glazier.Command
     , codify'
     , MonadCommand
     , ProgramT(..)
+    , runProgramT'
     , Program
     , runProgram
+    , runProgram'
     , execProgramT
-    , execProgram
     , execProgramT'
+    , execProgram
     , execProgram'
     , delegatify
+    , delegatify2
     , exec
     , exec'
     , eval
@@ -161,27 +164,33 @@ newtype ProgramT c m a = ProgramT { runProgramT :: DL.DList c -> m (a, DL.DList 
     deriving (MonadTrans, MFunctor)
         via Strict.StateT (DL.DList c)
 
-instance (MonadIO m) => MonadIO (ProgramT c m) where
+runProgramT' :: Monad m => ProgramT c m a -> m (a, DL.DList c)
+runProgramT' m = runProgramT m mempty
+
+instance MonadIO m => MonadIO (ProgramT c m) where
     liftIO = lift . liftIO
 
 instance Newtype (ProgramT c m a)
 
+type Program c = ProgramT c Identity
+
 runProgram :: Program c a -> DL.DList c -> (a, DL.DList c)
 runProgram m s = runIdentity $ runProgramT m s
 
-execProgramT :: (Monad m) => ProgramT c m a -> DL.DList c -> m (DL.DList c)
+runProgram' :: Program c a -> (a, DL.DList c)
+runProgram' m = runProgram m mempty
+
+execProgramT :: Monad m => ProgramT c m a -> DL.DList c -> m (DL.DList c)
 execProgramT m s = snd <$> (runProgramT m s)
+
+execProgramT' :: Monad m => ProgramT c m a -> m (DL.DList c)
+execProgramT' m = execProgramT m mempty
 
 execProgram :: Program c a -> DL.DList c -> DL.DList c
 execProgram m s = runIdentity $ execProgramT m s
 
-execProgramT' :: (Monad m) => ProgramT c m a -> m (DL.DList c)
-execProgramT' m = execProgramT m mempty
-
 execProgram' :: Program c a -> DL.DList c
-execProgram' m = runIdentity $ execProgramT' m
-
-type Program c = ProgramT c Identity
+execProgram' m = execProgram m mempty
 
 -- | Passthrough instance
 instance (Also a m, Monad m) => Also a (ProgramT c m) where
@@ -312,6 +321,16 @@ delegatify ::
 delegatify m = delegate $ \k -> do
     f <- codify k
     m f
+
+delegatify2 ::
+    ( MonadDelegate m
+    , MonadCodify m
+    )
+    => ((a -> Command m, b -> Command m) -> m ()) -> m (Either a b)
+delegatify2 m = delegate2 $ \(k, h) -> do
+    f <- codify k
+    g <- codify h
+    m (f, g)
 
 -- | @'exec' = 'instruct' . 'command'@
 --
