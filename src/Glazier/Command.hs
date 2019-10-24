@@ -39,6 +39,7 @@ module Glazier.Command
     , execProgram'
     , delegatify
     , delegatify2
+    , delegating
     , exec
     , exec'
     , eval
@@ -331,6 +332,13 @@ delegatify2 m = delegate2 $ \(k, h) -> do
     f <- codify k
     g <- codify h
     m (f, g)
+
+-- | Allows handling @n c@ that return @a@ as if it is @n ()@
+-- by delegating the handling of @a@
+delegating :: (MonadDelegate m, MonadCodify m, MonadProgram n, Command m ~ Command n) => n a -> m (Either a (n ()))
+delegating m = delegate2 $ \(f, g) -> do
+    f' <- codify f
+    g (m >>= instruct . f')
 
 -- | @'exec' = 'instruct' . 'command'@
 --
