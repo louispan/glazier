@@ -65,14 +65,16 @@ import Control.Monad.Cont
 import Control.Monad.Delegate
 import Control.Monad.Morph
 import Control.Monad.Reader
+import Control.Monad.RWS.Lazy as Lazy
+import Control.Monad.RWS.Strict as Strict
+import Control.Monad.State.Lazy as Lazy
+import Control.Monad.State.Strict as Strict
 import Control.Monad.Trans.Cont
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Identity
 import Control.Monad.Trans.Maybe
-import Control.Monad.Trans.State.Lazy as Lazy
-import Control.Monad.Trans.State.Strict as Strict
-import Control.Monad.Trans.Writer.Lazy as Lazy
-import Control.Monad.Trans.Writer.Strict as Strict
+import Control.Monad.Writer.Lazy as Lazy
+import Control.Monad.Writer.Strict as Strict
 import Control.Newtype.Generics
 import Data.Diverse.Lens
 import qualified Data.DList as DL
@@ -89,10 +91,21 @@ import Data.Semigroup
 type Cmd a c = AsFacet a c
 type Cmd' f c = AsFacet (f c) c
 
-type family Command m where
-    Command (ProgramT c m) = c
-    Command (Concur c) = c
-    Command (t m) = Command m
+type family Command (m :: * -> *)
+
+type instance Command (ProgramT c m) = c
+type instance Command (Concur c) = c
+type instance Command (IdentityT m) = Command m
+type instance Command (ReaderT r m) = Command m
+type instance Command (Strict.StateT s m) = Command m
+type instance Command (Lazy.StateT s m) = Command m
+type instance Command (Strict.WriterT w m) = Command m
+type instance Command (Lazy.WriterT w m) = Command m
+type instance Command (Strict.RWST r w s m) = Command m
+type instance Command (Lazy.RWST r w s m) = Command m
+type instance Command (ContT r m) = Command m
+type instance Command (MaybeT m) = Command m
+type instance Command (ExceptT e m) = Command m
 
 -- | Monad that can be added instructions of commands.
 -- To extract the command see 'MonadCodify'

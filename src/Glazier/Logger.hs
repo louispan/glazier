@@ -49,6 +49,8 @@ prettySrcLoc' SrcLoc {..}
 type AskLogLevel = MonadAsk' (Maybe LogLevel)
 askLogLevel :: AskLogLevel m => m (Maybe LogLevel)
 askLogLevel = askEnviron @(Maybe LogLevel) Proxy
+localLogLevel :: AskLogLevel m => (Maybe LogLevel -> Maybe LogLevel) -> m a -> m a
+localLogLevel = localEnviron @(Maybe LogLevel) Proxy
 
 type LogCallStackDepth = Tagged "LogCallStackDepth" Int
 -- | Nothing means don't change default callstack depth,
@@ -57,6 +59,8 @@ type LogCallStackDepth = Tagged "LogCallStackDepth" Int
 type AskLogCallStackDepth = MonadAsk' (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth :: AskLogCallStackDepth m => m (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth = askEnviron @(Maybe (Maybe LogCallStackDepth)) Proxy
+localLogCallStackDepth :: AskLogCallStackDepth m => (Maybe (Maybe LogCallStackDepth) -> Maybe (Maybe LogCallStackDepth)) -> m a -> m a
+localLogCallStackDepth = localEnviron @(Maybe (Maybe LogCallStackDepth)) Proxy
 
 --------------------------------------------------------------------
 
