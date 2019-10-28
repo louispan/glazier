@@ -48,9 +48,9 @@ prettySrcLoc' SrcLoc {..}
 -- | Nothing means do not log, else it has the allowed log level
 type AskLogLevel = MonadAsk' (Maybe LogLevel)
 askLogLevel :: AskLogLevel m => m (Maybe LogLevel)
-askLogLevel = askEnviron @(Maybe LogLevel) Proxy
+askLogLevel = askEnviron' @(Maybe LogLevel)
 localLogLevel :: AskLogLevel m => (Maybe LogLevel -> Maybe LogLevel) -> m a -> m a
-localLogLevel = localEnviron @(Maybe LogLevel) Proxy
+localLogLevel = localEnviron' @(Maybe LogLevel)
 
 type LogCallStackDepth = Tagged "LogCallStackDepth" Int
 -- | Nothing means don't change default callstack depth,
@@ -58,9 +58,9 @@ type LogCallStackDepth = Tagged "LogCallStackDepth" Int
 -- else limit by the depth
 type AskLogCallStackDepth = MonadAsk' (Maybe (Maybe LogCallStackDepth))
 askLogCallStackDepth :: AskLogCallStackDepth m => m (Maybe (Maybe LogCallStackDepth))
-askLogCallStackDepth = askEnviron @(Maybe (Maybe LogCallStackDepth)) Proxy
+askLogCallStackDepth = askEnviron' @(Maybe (Maybe LogCallStackDepth))
 localLogCallStackDepth :: AskLogCallStackDepth m => (Maybe (Maybe LogCallStackDepth) -> Maybe (Maybe LogCallStackDepth)) -> m a -> m a
-localLogCallStackDepth = localEnviron @(Maybe (Maybe LogCallStackDepth)) Proxy
+localLogCallStackDepth = localEnviron' @(Maybe (Maybe LogCallStackDepth))
 
 --------------------------------------------------------------------
 
