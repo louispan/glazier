@@ -21,6 +21,7 @@ module Glazier.Command
     , MonadProgram(..)
     , Cmd
     , Cmd'
+    , Cmd''
     , command
     , command'
     , command_
@@ -43,12 +44,12 @@ module Glazier.Command
     , exec
     , exec'
     , eval
-    -- , eval_
+    , eval_
     -- , invoke
     -- , invoke_
     , sequentially
     , concurringly
-    -- , concurringly_
+    , concurringly_
     -- | NB. Don't export NonBlocking constructor to guarantee
     -- that that it only contains non-blocking IO.
     , NonBlocking
@@ -90,6 +91,7 @@ import Data.Semigroup
 ----------------------------------------------
 type Cmd a c = AsFacet a c
 type Cmd' f c = AsFacet (f c) c
+type Cmd'' f c = AsFacet (f c c) c
 
 type family Command (m :: * -> *)
 
@@ -386,7 +388,7 @@ exec' = instruct . command'
 -- eval' k = delegatify $ exec' . k
 
 -- | Convert a functor into a 'MonadCommand' that fires an @a@
--- This requires @cmd@ to be a 'Functor'
+-- This requires @cmd@ to be a 'Functor', and @m@ to be a 'MonadDelegate'
 eval ::
     ( MonadCommand m
     , Cmd' cmd (Command m)
@@ -395,15 +397,16 @@ eval ::
     => cmd a -> m a
 eval c = delegatify $ exec' . (<$> c)
 
--- -- A simpler variation of 'invoke' that only requires a @MonadProgram c m@
--- eval_ ::
---     ( MonadProgram c m
---     , Cmd' cmd c
---     , Cmd' [] c
---     , Functor cmd
---     )
---     => cmd () -> m ()
--- eval_ = exec' . fmap command_
+-- | A simpler variation of 'eval' that does not required @m@ to be a 'MonadDelegate',
+-- only @MonadProgram m@
+eval_ ::
+    ( MonadProgram m
+    , Cmd' cmd (Command m)
+    , Cmd' [] (Command m)
+    , Functor cmd
+    )
+    => cmd () -> m ()
+eval_ = exec' . fmap command_
 
 -- | Adds a 'MonadCont' constraint. It is redundant but rules out
 -- using 'Concur' at the bottom of the transformer stack,
@@ -423,22 +426,19 @@ sequentially = id
 ----------------------------------------------
 
 -- This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c a@
--- This is 'invoke' type constrained to @Concur c a@
+-- This is 'eval' type constrained to @Concur c a@
 concurringly ::
     ( MonadCommand m
     , CmdConcur (Command m)
     ) => Concur (Command m) a -> m a
 concurringly = eval
 
--- -- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
--- -- A simpler variation of 'concurringly' that only requires a @MonadProgram c m@
--- -- This is 'invoke_' type constrained to @Concur c ()@
--- concurringly_ :: (MonadProgram c m, CmdConcur c) => Concur c () -> m ()
--- concurringly_ = eval_
-
-data ConcurResult a
-    = ConcurRead (NonBlocking IO [a]) -- read all the values from a TQueue
-    | ConcurPure a -- pure result, no IO required
+-- | This is a monad morphism that can be used to 'Control.Monad.Morph.hoist' transformer stacks on @Concur c ()@
+-- This is 'eval_' type constrained to @Concur c ()@
+-- A simpler variation of 'concurringly' that does not required @m@ to be a 'MonadDelegate',
+-- only @MonadProgram m@
+concurringly_ :: (MonadProgram m, CmdConcur (Command m)) => Concur (Command m) () -> m ()
+concurringly_ = eval_
 
 instance Functor ConcurResult where
     fmap f (ConcurRead a) = ConcurRead (fmap f <$> a)
@@ -450,6 +450,10 @@ instance Applicative ConcurResult where
     (ConcurPure f) <*> (ConcurRead a) = ConcurRead ((pure f <*>) <$> a)
     (ConcurRead f) <*> (ConcurPure a) = ConcurRead ((\f' -> ($ a) <$> f') <$> f)
     (ConcurRead f) <*> (ConcurRead a) = ConcurRead ((\f' a' -> f' <*> a') <$> f <*> a)
+
+data ConcurResult a
+    = ConcurRead (NonBlocking IO [a]) -- read all the values from a TQueue, should only be done after waiting for all async actions to complete
+    | ConcurPure a -- pure result, no IO required
 
 -- | This monad is intended to be used with @ApplicativeDo@ to allow do notation
 -- for composing commands that can be run concurrently, where you want to
@@ -463,7 +467,7 @@ newtype Concur c a = Concur
     { runConcur :: ProgramT c (NonBlocking IO) (ConcurResult a)
     } deriving (G.Generic, G.Generic1)
 
-type CmdConcur c = (Cmd' [] c, AsFacet (Concur c c) c)
+type CmdConcur c = (Cmd' [] c, Cmd'' Concur c)
 
 instance Show (Concur c a) where
     showsPrec _ _ = showString "Concur"
@@ -481,34 +485,29 @@ instance Applicative (Concur c) where
 -- So it is more efficient to groups of pure binds first before binding with blocking code.
 -- See the instance of 'Monad' for 'Concur'.
 instance (CmdConcur c) => Monad (Concur c) where
-    (Concur m) >>= k = Concur $ do
-        m' <- m -- get the blocking io action while updating the state
-        case m' of
-            -- pure value, no blocking required, avoid using Bus.
-            ConcurPure a -> runConcur $ k a
-            -- blocking io, must use Chan
-            -- We use chan because the monad may fire into the delegate more than once
-            ConcurRead ma -> do
-                (recv, send) <- lift newBusIO
-                -- Aim: convert the Concur IO effects into a command to be interpreted
-                -- first, wrap the @ma@ we want to run into a Concur, then fmap it
-                -- to convert @Concur c a@ to @Concur c c@
-                exec' $ flip fmap (Concur @c $ pure $ ConcurRead ma)
-                    -- goal :: a -> c
-                    -- Given the result of @a@, run through the bind @k@
-                    -- to get the resultant @Concur c b@, then fmap it
-                    -- to convert @Concur c b@ to @Concur c c@
-                    -- then command' converts @Concur c c@ to a @c@
-                    (\a -> command' $ flip fmap (k a)
-                        -- goal :: b -> c
-                        -- Given @b@ result @Concur c b@ from the bind,
-                        -- write the @b@ of bind into @v@
-                        (\b -> command' -- command' converts @Concur c c@ to a @c@
-                            -- command_ converts @Concur c ()@ to @Concur c c@
-                            $ command_ <$> (Concur @c $ lift $ fmap ConcurPure $ send b)))
+    m >>= k = Concur $ do
+        (recv, send) <- lift newBusIO
 
-                -- return the effect to read the contents of the TQueue
-                pure $ ConcurRead recv
+        -- We don't want to read from @m@ now because it may all the data yet
+        -- schedule a thread via 'exec'' that will send data to ma
+        -- before return the final read
+        -- The Concur executor will always run through all the NonBlocking IO
+        -- and wait for commands to finish before doing the read.
+        exec' $ flip fmap m
+            -- goal :: a -> c
+            -- Given the result of @a@, run through the bind @k@
+            -- to get the resultant @Concur c b@, then fmap it
+            -- to convert @Concur c b@ to @Concur c c@
+            -- then command' converts @Concur c c@ to a @c@
+            (\a -> command' $ flip fmap (k a)
+                -- goal :: b -> c
+                -- Given @b@ result @Concur c b@ from the bind,
+                -- write the @b@ of bind into @v@
+                (\b -> command' -- command' converts @Concur c c@ to a @c@
+                    -- command_ converts @Concur c ()@ to @Concur c c@
+                    $ command_ <$> (Concur @c $ lift $ ConcurPure <$> send b)))
+
+        pure $ ConcurRead recv
 
 -- | The monad @Concur c c@ itself is a command @c@, so an instance of @MonadCodify@ canbe made
 instance CmdConcur c => MonadCodify (Concur c) where
@@ -520,7 +519,7 @@ instance CmdConcur c => MonadCodify (Concur c) where
 instance CmdConcur c => MonadProgram (Concur c) where
     instruct = Concur . fmap ConcurPure . instruct
 
--- | This instance makes usages of 'eval'' concurrent when used
+-- | This instance makes usages of 'exec'' concurrent when used
 -- inside a 'concurringly' or 'concurringly_' block.
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
@@ -528,17 +527,8 @@ instance CmdConcur c => MonadProgram (Concur c) where
 instance CmdConcur c => MonadDelegate (Concur c) where
     delegate f = Concur $ do
         (recv, send) <- lift newBusIO
-        -- e :: ConcurResult ()
-        e <- runConcur $ f (\a -> Concur @c $ lift $ fmap ConcurPure $ send a)
-
-        pure $ ConcurRead $ do
-            case e of
-                 -- run any other reads, but discard the unit result
-                ConcurRead r -> void r
-                -- no stm effects to do
-                _ -> pure ()
-            -- also do this read
-            recv
+        void $ runConcur $ f (\a -> Concur @c $ lift $ ConcurPure <$> send a)
+        pure $ ConcurRead recv
 
 -- | Passthrough instance
 instance CmdConcur c => Also a (Concur c) where

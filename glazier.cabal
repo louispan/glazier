@@ -53,6 +53,7 @@ test-suite glazier-test
                      , data-diverse-lens >= 4.3
                      , dlist >= 0.8
                      , glazier
+                     , hspec >= 2
                      , lens >= 4.14
                      , mtl >= 2.2
                      , stm >= 2.4

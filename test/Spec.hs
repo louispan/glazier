@@ -12,6 +12,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 -- Example of interpreting using polymorphic variant
@@ -32,6 +33,7 @@ import Data.Proxy
 import Data.Tagged
 import Glazier.Command
 import Glazier.Command.Exec
+import Test.Hspec
 
 #if MIN_VERSION_base(4,9,0) && !MIN_VERSION_base(4,10,0)
 import Data.Semigroup
@@ -82,15 +84,17 @@ instance Show HelloWorldEffect where
     showsPrec _ ByeWorld = showString "ByeWorld"
 
 -- | Define the sum of all variants
-type AppEffects cmd = '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect]
--- | Add a newtype wrapper to allow recursive definition
-newtype AppCmd = AppCmd { unAppCmd :: Which (AppEffects AppCmd)}
-    deriving Show
+-- type AppEffects c = '[[c], Concur c c, IOEffect c, HelloWorldEffect]
+-- -- | Add a newtype wrapper to allow recursive definition
+-- newtype AppCmd = AppCmd { unAppCmd :: Which (AppEffects AppCmd)}
+--     deriving Show
+-- -- | Define AsFac   et instances for all types in the variant
+-- -- UndecidableInstances!
+-- instance (AsFacet a (Which (AppEffects AppCmd))) => AsFacet a AppCmd where
+--     facet = iso unAppCmd AppCmd . facet
 
--- | Define AsFacet instances for all types in the variant
--- UndecidableInstances!
-instance (AsFacet a (Which (AppEffects AppCmd))) => AsFacet a AppCmd where
-    facet = iso unAppCmd AppCmd . facet
+type instance AppCmds "App" c = [[c], Concur c c, IOEffect c, HelloWorldEffect]
+type AppCmd' = AppCmd "App"
 
 ----------------------------------------------
 -- IO interpreter
@@ -106,44 +110,42 @@ execHelloWorldEffect ByeWorld = liftIO $ putStrLn "Bye, world!"
 
 -- | Combine interpreters
 execEffects' ::
-    ( AsFacet (IOEffect cmd) cmd
-    , AsFacet HelloWorldEffect cmd
-    , AsConcur cmd
+    ( Cmd' IOEffect c
+    , Cmd HelloWorldEffect c
+    , Cmd'' Concur c
+    , Cmd' [] c
     , MonadUnliftIO m
     )
-    => (cmd -> m ()) -> (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], cmd -> MaybeT m ())
+    => (c -> m ()) -> (Proxy '[[c], Concur c c, IOEffect c, HelloWorldEffect], c -> MaybeT m ())
 execEffects' executor =
     maybeExec (traverse_ @[] executor)
     `orExec` maybeExec (execConcur executor)
     `orExec` maybeExec (execIOEffect executor)
     `orExec` maybeExec execHelloWorldEffect
 
-execEffects :: MonadUnliftIO m => AppCmd -> m ()
+execEffects :: MonadUnliftIO m => AppCmd' -> m ()
 execEffects = fixVerifyExec unAppCmd execEffects'
 
 ----------------------------------------------
 -- Test interpreter
 ----------------------------------------------
 
-data Output
-data Input
-
 -- Some interpreters need to be an instance of MonadUniftIO,
 -- which limits the transformer stack to ReaderT.
 testIOEffect ::
     ( MonadReader r m
-    , Has (Tagged Output (TVar [String])) r
-    , Has (Tagged Input (TVar [String])) r
+    , Has (Tagged "Output" (TVar [String])) r
+    , Has (Tagged "Input" (TVar [String])) r
     , MonadIO m
     )
     => (cmd -> m ()) -> IOEffect cmd -> m ()
 testIOEffect _ (PutStrLn str) = do
-    xs <- view (hasTag @Output)
+    xs <- view (hasTag @"Output")
     liftIO $ atomically $ modifyTVar' xs (\xs' -> ("PutStrLn " <> show str) : xs')
 
 testIOEffect executor (GetLine k) = do
-    xs <- view (hasTag @Output)
-    ys <- view (hasTag @Input)
+    xs <- view (hasTag @"Output")
+    ys <- view (hasTag @"Input")
     y <- liftIO $ atomically $ do
         ys' <- readTVar ys
         let (y, ys'') = case ys' of
@@ -156,28 +158,29 @@ testIOEffect executor (GetLine k) = do
 
 testHelloWorldEffect ::
     ( MonadReader r m
-    , Has (Tagged Output (TVar [String])) r
+    , Has (Tagged "Output" (TVar [String])) r
     , MonadIO m
     )
     => HelloWorldEffect -> m ()
 testHelloWorldEffect HelloWorld = do
-    xs <- view (hasTag @Output)
+    xs <- view (hasTag @"Output")
     liftIO $ atomically $ modifyTVar' xs (\xs' -> "Hello World" : xs')
 testHelloWorldEffect ByeWorld = do
-    xs <- view (hasTag @Output)
+    xs <- view (hasTag @"Output")
     liftIO $ atomically $ modifyTVar' xs (\xs' -> "Bye, World" : xs')
 
 -- | Combine test interpreters
 testEffects' ::
     ( MonadReader r m
-    , Has (Tagged Output (TVar [String])) r
-    , Has (Tagged Input (TVar [String])) r
+    , Has (Tagged "Output" (TVar [String])) r
+    , Has (Tagged "Input" (TVar [String])) r
     , MonadUnliftIO m
-    , AsFacet (IOEffect cmd) cmd
-    , AsFacet HelloWorldEffect cmd
-    , AsConcur cmd
+    , Cmd' IOEffect c
+    , Cmd HelloWorldEffect c
+    , Cmd'' Concur c
+    , Cmd' [] c
     )
-    => (cmd -> m ()) -> (Proxy '[[cmd], Concur cmd cmd, IOEffect cmd, HelloWorldEffect], cmd -> MaybeT m ())
+    => (c -> m ()) -> (Proxy '[[c], Concur c c, IOEffect c, HelloWorldEffect], c -> MaybeT m ())
 testEffects' executor =
     maybeExec (traverse_ @[] executor)
     `orExec` maybeExec (execConcur executor)
@@ -187,103 +190,156 @@ testEffects' executor =
 -- | Tie testEffects_ with itself to get the final interpreter
 testEffects ::
     ( MonadReader r m
-    , Has (Tagged Output (TVar [String])) r
-    , Has (Tagged Input (TVar [String])) r
+    , Has (Tagged "Output" (TVar [String])) r
+    , Has (Tagged "Input" (TVar [String])) r
     , MonadUnliftIO m
-    ) => AppCmd -> m ()
+    ) => AppCmd' -> m ()
 testEffects = fixVerifyExec unAppCmd testEffects'
 
 ----------------------------------------------
 -- programs
 ----------------------------------------------
 
-ioProgram :: (AsFacet (IOEffect cmd) cmd, AsFacet [cmd] cmd) => Program cmd ()
+ioProgram :: (Cmd' IOEffect c, Cmd' [] c) => Program c ()
 ioProgram = do
     exec' $ PutStrLn "Write two things"
     evalContT $ do
         -- Use the continuation monad to compose the function to pass into GetLine
-        a1 <- sequentially . eval' $ GetLine
-        a2 <- sequentially . eval' $ GetLine
+        a1 <- sequentially . delegatify $ exec' . GetLine
+        a2 <- sequentially . delegatify $ exec' . GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> exec' $ PutStrLn "Easter egg!"
             _ -> do
                 exec' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- sequentially . eval' $ GetLine
+                b <- sequentially . delegatify $ exec' . GetLine
                 exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using only concur
+-- concurringly_ is ok to use by @Program c ()@
 ioProgramWithOnlyConcur ::
-    ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd
-    -- , MonadCommand cmd m
-    ) => Program cmd ()
+    ( Cmd' IOEffect c
+    , Cmd'' Concur c
+    , Cmd' [] c
+    ) => Program c ()
 ioProgramWithOnlyConcur = do
     exec' $ PutStrLn "Write two things"
     concurringly_ $ do
         -- Use the Concur monad to batch two GetLines concurrently
-        a1 <- eval' $ GetLine
-        a2 <- eval' $ GetLine
+        a1 <- delegatify $ exec' . GetLine
+        a2 <- delegatify $ exec' . GetLine
         -- Do something monadic/different based on the return value.
-        case a1 of
-            "secret" -> exec' $ PutStrLn "Easter egg!"
-            _ -> do
-                exec' $ PutStrLn "Write something else"
-                -- more GetLine input
-                b <- eval' $ GetLine
-                exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+        evalContT $ sequentially $ do
+            -- exec' $ PutStrLn "Foobar"
+            case a1 of
+                "secret" -> do
+                    exec' $ PutStrLn "Easter egg!"
+                    -- exec' $ PutStrLn "easter"
+                _ -> do
+                    -- NB everything is threaded!
+                    exec' $ PutStrLn "Write something else"
+                    -- more GetLine input
+                    b <- delegatify $ exec' . GetLine
+                    exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
+                    -- exec' $ PutStrLn "bar"
 
 -- | using concur & cont together
+-- evalContT is required because @Program c ()@ is not a MonadDelegate by itself
 ioProgramWithConcur ::
-    ( AsFacet (IOEffect cmd) cmd
-    , AsConcur cmd) => Program cmd ()
+    ( Cmd' IOEffect c
+    , Cmd'' Concur c
+    , Cmd' [] c) => Program c ()
 ioProgramWithConcur = do
     exec' $ PutStrLn "Write two things"
     evalContT $ do
         (a1, a2) <- concurringly $ do
                 -- Use the Concur monad to batch two GetLines concurrently
                 -- requires ApplicativeDo
-                a1 <- eval' $ GetLine
-                a2 <- eval' $ GetLine
+                a1 <- delegatify $ exec' . GetLine
+                a2 <- delegatify $ exec' . GetLine
                 pure (a1, a2)
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> exec' $ PutStrLn "Easter egg!"
             _ -> do
                 exec' $ PutStrLn "Write something else"
-                -- more GetLine input
-                b <- sequentially . eval' $ GetLine
+                -- more GetLine input, but sequentially
+                b <- sequentially . delegatify $ exec' . GetLine
                 exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | Program using both effects
 program ::
-    ( AsFacet HelloWorldEffect cmd
-    , AsFacet (IOEffect cmd) cmd
-    , AsFacet [cmd] cmd) => Program cmd ()
+    ( Cmd HelloWorldEffect c
+    , Cmd' IOEffect c
+    , Cmd' [] c) => Program c ()
 program = do
     exec $ HelloWorld
     ioProgram
     exec $ ByeWorld
 
 main :: IO ()
-main = do
-    -- Reduce the program to the list of commands.
-    let cs :: [AppCmd]
-        cs =  DL.toList $ execProgram' ioProgramWithConcur
-        -- cs =  DL.toList $ (`execState` mempty) ioProgramWithOnlyConcur
+main = hspec spec
 
-    -- Shoud randomly have different results depending on which
-    -- concurrent GetLine is executed first.
+spec :: Spec
+spec = do
+    describe "ioProgram" $ do
+        it "always produce the same ouput for the given input" $ do
+            -- Reduce the program to the list of commands.
+            let cs :: [AppCmd']
+                cs =  DL.toList $ execProgram' ioProgram
 
+            -- Shoud randomly have different results depending on which
+            -- concurrent GetLine is executed first.
+            replicateM_ 1000 $ do
+                (is, os) <- specProgram cs
+                (length is :: Int) `shouldSatisfy` (== 1) -- is always just 'z' left
+                (length os :: Int) `shouldSatisfy` (== 4)
+
+    describe "ioProgramWithOnlyConcur" $ do
+        it "always produce same output the initial input, then may produce the different ouput for last input" $ do
+            -- Reduce the program to the list of commands.
+            let cs :: [AppCmd']
+                cs =  DL.toList $ execProgram' ioProgramWithOnlyConcur
+
+            -- Shoud randomly have different results depending on which
+            -- concurrent GetLine is executed first.
+            replicateM_ 1000 $ do
+                (is, os) <- specProgram cs
+                (length is :: Int) `shouldSatisfy` (<= 1) -- could be fully consumed or has just 'z' left
+                (length os :: Int) `shouldSatisfy` (\a -> a == 4 || a == 6)
+
+
+    describe "ioProgramWithConcur" $ do
+        it "is similar as ioProgramWithOnlyConcur but uses concurringly_ to avoid evalContT" $ do
+            -- Reduce the program to the list of commands.
+            let cs :: [AppCmd']
+                cs =  DL.toList $ execProgram' ioProgramWithConcur
+
+            -- Shoud randomly have different results depending on which
+            -- concurrent GetLine is executed first.
+            replicateM_ 1000 $ do
+                (is, os) <- specProgram cs
+                (length is :: Int) `shouldSatisfy` (<= 1) -- could be fully consumed or has just 'z' left
+                (length os :: Int) `shouldSatisfy` (\a -> a == 4 || a == 6)
+
+    -- describe "execEffects" $ do
+    --     it "uncomment to run the program commands interactively" $ do
+    --         -- interpret the program commands interactively
+    --         let cs :: [AppCmd']
+    --             cs =  DL.toList $ execProgram' ioProgramWithConcur
+    --         execEffects $ command' @[] cs :: IO ()
+
+
+specProgram :: [AppCmd'] -> IO ([String], [String])
+specProgram cs = do
     -- interpret the program commands with preconfigured inputs
     is <- newTVarIO ["secret", "y", "z"]
     os <- newTVarIO ([] :: [String])
-    (`runReaderT` (Tagged @Input is, Tagged @Output os)) $ testEffects $ command' @[] cs
+    (`runReaderT` (Tagged @"Input" is, Tagged @"Output" os)) $ testEffects $ command' @[] cs
     is' <- readTVarIO is
     os' <- readTVarIO os
-    putStrLn $ "Unconsumed input: " <> show is'
-    putStrLn $ "Effects executed: " <> show (reverse os')
-
-    -- interpret the program commands interactively
-    -- execEffects $ command' @[] cs
+    -- putStrLn $ "Unconsumed input: " <> show is'
+    let os'' = reverse os'
+    -- putStrLn $ "Effects executed: " <> show os''
+    pure (is', os'')

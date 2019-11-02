@@ -12,6 +12,7 @@ newtype NonBlocking m a = NonBlocking (m a)
 unNonBlocking :: NonBlocking m a -> m a
 unNonBlocking (NonBlocking m) = m
 
+-- | (read all the results from a TQueue, write a value to a TQueue)
 newBusIO :: NonBlocking IO (NonBlocking IO [a], a -> NonBlocking IO ())
 newBusIO = NonBlocking $
     -- smaller atomic stm transactions have better performance

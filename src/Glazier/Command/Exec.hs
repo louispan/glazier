@@ -13,7 +13,6 @@ module Glazier.Command.Exec where
 import Control.Applicative
 import Control.Lens
 import Control.Monad.IO.Unlift
-import Control.Monad.State.Strict
 import Control.Monad.Trans.Extras
 import Control.Monad.Trans.Maybe
 import Data.Diverse.Lens
@@ -22,6 +21,21 @@ import Data.Foldable
 import Data.Proxy
 import Glazier.Command
 import qualified UnliftIO.Async as U
+
+-- | This defines the list of commands for a particular "app"
+type family AppCmds (app :: k1) c :: [k2]
+
+-- | This is used to define the sum of all commands
+-- where the commands might recursively refer to this sum command.
+data family AppCmd (app :: k1)
+
+-- | The instance of AppCmd which recursively refers to itself
+newtype instance AppCmd app = AppCmd { unAppCmd :: Which (AppCmds app (AppCmd app)) }
+
+-- | Define AsFacet instances for all types in the variant
+-- UndecidableInstances!
+instance (AsFacet a (Which (AppCmds app (AppCmd app)))) => AsFacet a (AppCmd app) where
+    facet = iso unAppCmd AppCmd . facet
 
 -- | Create an executor for a variant in the command type.
 -- returns a tuple with a 'Proxy' to keep track of the the types handled by the executor.
@@ -85,6 +99,7 @@ fixVerifyExec' ::
 fixVerifyExec' unCmd maybeExecuteCmd = fixExec' (verifyExec unCmd . maybeExecuteCmd)
 
 
+-- TODO: only use thread if array is greater than 1
 execConcur ::
     MonadUnliftIO m
     => (c -> m ())
@@ -97,25 +112,20 @@ execConcur executor c = do
             ConcurRead x -> readAndExecute x
             ConcurPure x -> executor x
   where
-    -- we run mx multiple times until BlockedIndefinitelyOnMVar
-    -- to make sure we have drained all the data from the Chan.
-    -- forkIO discards BlockedIndefinitelyOnMVar.
-    -- DANGER! If the Left IO contains something that will never fail
-    -- then this thread will never be cleaned up.
     readAndExecute x = do
-        as <- liftIO (unNonBlocking x)
+        as <- liftIO $ unNonBlocking x
         -- for each value obtained, fire them back to the executor
         as' <- traverse (U.async . executor) as
         -- now wait for all the threads to finish
-        traverse_ (void . U.waitCatch) as'
+        traverse_ U.wait as' -- shouldn't have exceptions!
     execConcur_ = do
         -- get the list of commands to run
-        (r, cs) <- liftIO $ unNonBlocking $ (`runProgramT` mempty) $ runConcur c
+        (r, cs) <- liftIO . unNonBlocking . runProgramT' $ runConcur c
         -- run the batched commands in separate threads
         -- these should produce and write values to the bus channel
         as <- traverse (U.async . executor) (DL.toList cs)
         -- now wait for all the threads to finish writing to TQueue
-        traverse_ (void . U.waitCatch) as
+        traverse_ U.wait as -- shouldn't have exceptions!
         -- now it is ok to return the io to read from the TQueue
         pure r
 
