@@ -114,20 +114,23 @@ execConcur executor c = do
   where
     readAndExecute x = do
         as <- liftIO $ unNonBlocking x
-        -- for each value obtained, fire them back to the executor
-        as' <- traverse (U.async . executor) as
-        -- now wait for all the threads to finish
-        traverse_ U.wait as' -- shouldn't have exceptions!
+        -- for each value obtained, fire them back to the executor as
+        executeCmds as
     execConcur_ = do
         -- get the list of commands to run
         (r, cs) <- liftIO . unNonBlocking . runProgramT' $ runConcur c
         -- run the batched commands in separate threads
         -- these should produce and write values to the bus channel
-        as <- traverse (U.async . executor) (DL.toList cs)
-        -- now wait for all the threads to finish writing to TQueue
-        traverse_ U.wait as -- shouldn't have exceptions!
+        executeCmds (DL.toList cs)
         -- now it is ok to return the io to read from the TQueue
         pure r
+    executeCmds cs = case cs of
+        [c'] -> executor c'
+        cs' -> do
+            cs'' <- traverse (U.async . executor) cs'
+            -- now wait for all the threads to finish
+            traverse_ U.wait cs'' -- shouldn't have exceptions!
+
 
 execIO :: MonadIO m => (c -> m ()) -> IO c -> m ()
 execIO executor m = liftIO m >>= executor
