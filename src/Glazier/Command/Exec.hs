@@ -30,7 +30,10 @@ type family AppCmds (app :: k1) c :: [k2]
 data family AppCmd (app :: k1)
 
 -- | The instance of AppCmd which recursively refers to itself
-newtype instance AppCmd app = AppCmd { unAppCmd :: Which (AppCmds app (AppCmd app)) }
+newtype instance AppCmd app = AppCmd (Which (AppCmds app (AppCmd app)))
+
+unAppCmd :: forall app. AppCmd app -> Which (AppCmds app (AppCmd app))
+unAppCmd (AppCmd w) = w
 
 -- | Define AsFacet instances for all types in the variant
 -- UndecidableInstances!
@@ -39,7 +42,7 @@ instance (AsFacet a (Which (AppCmds app (AppCmd app)))) => AsFacet a (AppCmd app
 
 -- | Create an executor for a variant in the command type.
 -- returns a tuple with a 'Proxy' to keep track of the the types handled by the executor.
-maybeExec :: (Applicative m, AsFacet a c) => (a -> m b) -> (Proxy '[a], c -> MaybeT m b)
+maybeExec :: (Applicative m, Cmd a c) => (a -> m b) -> (Proxy '[a], c -> MaybeT m b)
 maybeExec k = (Proxy, \c -> MaybeT . sequenceA $ (k <$> preview facet c))
 
 -- | Combines executors, keeping track of the combined list of types handled.
@@ -52,24 +55,24 @@ infixl 3 `orExec` -- like <|>
 fixExec :: Functor m => ((c -> m ()) -> c -> MaybeT m ()) -> c -> m ()
 fixExec fexec = (`evalMaybeT` ()) . fexec (fixExec fexec)
 
--- | A variation of 'fixExec' for executors that return cmds that should be evaluated next
-fixExec' :: Monad m => ((c -> m ()) -> c -> MaybeT m [c]) -> c -> m ()
-fixExec' fexec c = do
-    let execCmd = (`evalMaybeT` []) . fexec (fixExec' fexec) -- c -> MaybeT m [c]
-        execCmds cs = do -- [c] -> MaybeT m ()
-            case cs of
-                [] -> pure () -- no more extra commands to process, break out of loop
-                cs' -> do
-                    -- process the extra commands, and get extra commands to process
-                    cs'' <- (DL.concat . (fmap DL.fromList)) <$> traverse execCmd cs'
-                    -- recusrively process the extra commands
-                    execCmds $ DL.toList cs''
-    cs <- execCmd c
-    execCmds cs
+-- -- | A variation of 'fixExec' for executors that return cmds that should be evaluated next
+-- fixExec' :: Monad m => ((c -> m ()) -> c -> MaybeT m [c]) -> c -> m ()
+-- fixExec' fexec c = do
+--     let execCmd = (`evalMaybeT` []) . fexec (fixExec' fexec) -- c -> MaybeT m [c]
+--         execCmds cs = do -- [c] -> MaybeT m ()
+--             case cs of
+--                 [] -> pure () -- no more extra commands to process, break out of loop
+--                 cs' -> do
+--                     -- process the extra commands, and get extra commands to process
+--                     cs'' <- (DL.concat . (fmap DL.fromList)) <$> traverse execCmd cs'
+--                     -- recusrively process the extra commands
+--                     execCmds $ DL.toList cs''
+--     cs <- execCmd c
+--     execCmds cs
 
 -- | Use this function to verify at compile time that the given executor's Proxy will fullfill
 -- all the variant types in a command type.
--- THe types in the command does not have to be in the same order as the types in the Proxy.
+-- The types in the command does not have to be in the same order as the types in the Proxy.
 -- There can't be any extra types in ys or xs.
 -- redundant-constraints: used to constrain xs and ys
 verifyExec ::
@@ -89,17 +92,16 @@ fixVerifyExec ::
     ) => (c -> Which xs) -> ((c -> m ()) -> (Proxy ys, c -> MaybeT m ())) -> c -> m ()
 fixVerifyExec unCmd maybeExecuteCmd = fixExec (verifyExec unCmd . maybeExecuteCmd)
 
--- 'verifyExec' and 'fixExec'' an executor.
-fixVerifyExec' ::
-    ( AppendUnique '[] ys ~ ys
-    , AppendUnique xs ys ~ xs
-    , AppendUnique ys xs ~ ys
-    , Monad m
-    ) => (c -> Which xs) -> ((c -> m ()) -> (Proxy ys, c -> MaybeT m [c])) -> c -> m ()
-fixVerifyExec' unCmd maybeExecuteCmd = fixExec' (verifyExec unCmd . maybeExecuteCmd)
+-- -- 'verifyExec' and 'fixExec'' an executor.
+-- fixVerifyExec' ::
+--     ( AppendUnique '[] ys ~ ys
+--     , AppendUnique xs ys ~ xs
+--     , AppendUnique ys xs ~ ys
+--     , Monad m
+--     ) => (c -> Which xs) -> ((c -> m ()) -> (Proxy ys, c -> MaybeT m [c])) -> c -> m ()
+-- fixVerifyExec' unCmd maybeExecuteCmd = fixExec' (verifyExec unCmd . maybeExecuteCmd)
 
 
--- TODO: only use thread if array is greater than 1
 execConcur ::
     MonadUnliftIO m
     => (c -> m ())
