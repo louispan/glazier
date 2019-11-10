@@ -484,10 +484,10 @@ instance (CmdConcur c) => Monad (Concur c) where
     m >>= k = Concur $ do
         (recv, send) <- lift newBusIO
 
-        -- We don't want to read from @m@ now because it may all the data yet
-        -- schedule a thread via 'exec'' that will send data to ma
-        -- before return the final read
-        -- The Concur executor will always run through all the NonBlocking IO
+        -- Can't read from @m@ now because it might not have all the data yet.
+        -- Schedule a thread via 'exec'' that will send data to ma.
+        -- before returning the final read
+        -- The Concur executor will always run through all the IO
         -- and wait for commands to finish before doing the read.
         exec' $ flip fmap m
             -- goal :: a -> c
@@ -499,18 +499,18 @@ instance (CmdConcur c) => Monad (Concur c) where
                 -- goal :: b -> c
                 -- Given @b@ result @Concur c b@ from the bind,
                 -- write the @b@ of bind into @v@
-                (\b -> command' -- command' converts @Concur c c@ to a @c@
-                    -- command_ converts @Concur c ()@ to @Concur c c@
-                    $ command_ <$> (Concur @c $ lift $ ConcurPure <$> send b)))
+                (codifyConcur (\b -> Concur @c $ lift $ ConcurPure <$> send b)))
 
         pure $ ConcurRead recv
 
 -- | The monad @Concur c c@ itself is a command @c@, so an instance of @MonadCodify@ canbe made
 instance CmdConcur c => MonadCodify (Concur c) where
-    codify f = pure $
-         command' -- a -> c
-         . fmap command_ -- a -> Concur c c
-         . f -- a -> Concur c ()
+    codify f = pure $ codifyConcur f
+
+codifyConcur :: CmdConcur c => (a -> Concur c ()) -> (a -> c)
+codifyConcur f = command' -- a -> c
+     . fmap command_ -- a -> Concur c c
+     . f -- a -> Concur c ()
 
 instance CmdConcur c => MonadProgram (Concur c) where
     instruct = Concur . fmap ConcurPure . instruct
@@ -519,12 +519,15 @@ instance CmdConcur c => MonadProgram (Concur c) where
 -- inside a 'concurringly' or 'concurringly_' block.
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
--- The Concur monad allows scheduling the command in concurrently with other commands.
+-- The Concur monad allows scheduling the command concurrently with other commands.
 instance CmdConcur c => MonadDelegate (Concur c) where
     delegate f = Concur $ do
         (recv, send) <- lift newBusIO
         void $ runConcur $ f (\a -> Concur @c $ lift $ ConcurPure <$> send a)
         pure $ ConcurRead recv
+
+    -- need to result in a monad that will read a single @()@ instead of a list of @a@s
+    discharges f m = instruct . command' $ codifyConcur f <$> m
 
 instance CmdConcur c => Monoid (Concur c a) where
     mempty = finish (pure ())
