@@ -115,12 +115,12 @@ execConcur executor c = do
             ConcurPure x -> executor x
   where
     readAndExecute x = do
-        as <- liftIO $ unNonBlocking x
+        as <- liftIO x
         -- for each value obtained, fire them back to the executor as
         executeCmds as
     execConcur_ = do
         -- get the list of commands to run
-        (r, cs) <- liftIO . unNonBlocking . runProgramT' $ runConcur c
+        (r, cs) <- liftIO . runProgramT' $ runConcur c
         -- run the batched commands in separate threads
         -- these should produce and write values to the bus channel
         executeCmds (DL.toList cs)

@@ -50,16 +50,11 @@ module Glazier.Command
     , sequentially
     , concurringly
     , concurringly_
-    -- | NB. Don't export NonBlocking constructor to guarantee
-    -- that that it only contains non-blocking IO.
-    , NonBlocking
-    , unNonBlocking
     , ConcurResult(..)
     , Concur(..)
     , CmdConcur
     ) where
 
-import Control.Also
 import Control.Applicative
 import Control.Lens
 import Control.Monad.Cont
@@ -208,11 +203,11 @@ execProgram m s = runIdentity $ execProgramT m s
 execProgram' :: Program c a -> DL.DList c
 execProgram' m = execProgram m mempty
 
--- | Passthrough instance
-instance (Also a m, Monad m) => Also a (ProgramT c m) where
-    alsoZero = lift alsoZero
-    ProgramT f `also` ProgramT g = ProgramT $ Strict.runStateT $
-        (Strict.StateT f) `also` (Strict.StateT g)
+-- -- | Passthrough instance
+-- instance (Also a m, Monad m) => Also a (ProgramT c m) where
+--     alsoZero = lift alsoZero
+--     ProgramT f `also` ProgramT g = ProgramT $ Strict.runStateT $
+--         (Strict.StateT f) `also` (Strict.StateT g)
 
 -- | Passthrough instance
 instance (Monoid (m a), Monad m) => Monoid (ProgramT c m a) where
@@ -412,7 +407,7 @@ eval_ = exec' . fmap command_
 -- using 'Concur' at the bottom of the transformer stack,
 -- which prevents the use of `concurringly`.
 -- 'sequentially' is used for operations that MUST run sequentially, not concurrently.
--- Eg. when the overhead of using 'Concur' 'MVar' is not worth it, or
+-- Eg. when the overhead of using 'Concur' IO is not worth it, or
 -- when data dependencies are not explicitly specified by monadic binds,
 -- Eg. A command to update mutable variable must execute before
 -- a command that reads from the mutable variable.
@@ -451,20 +446,18 @@ instance Applicative ConcurResult where
     (ConcurRead f) <*> (ConcurPure a) = ConcurRead ((\f' -> ($ a) <$> f') <$> f)
     (ConcurRead f) <*> (ConcurRead a) = ConcurRead ((\f' a' -> f' <*> a') <$> f <*> a)
 
+-- | The 'ConcurPure' allows an efficient 'Applicative' instance of 'Concur'
+-- for pure computations
 data ConcurResult a
-    = ConcurRead (NonBlocking IO [a]) -- read all the values from a TQueue, should only be done after waiting for all async actions to complete
+    = ConcurRead (IO [a]) -- read all the values from a mutable list, should only be done after waiting for all async actions to complete
     | ConcurPure a -- pure result, no IO required
-
 -- | This monad is intended to be used with @ApplicativeDo@ to allow do notation
 -- for composing commands that can be run concurrently, where you want to
 -- wait for *all* the concurrent commands to finish.
 -- The 'Applicative' instance can merge multiple commands into the internal state of @DList c@.
 -- The 'Monad' instance creates a 'CmdConcur' command before continuing the bind.
 newtype Concur c a = Concur
-    -- The base monad NonBlocking IO doesn't block/retry.
-    -- This distinction prevents nested layers of Chan for monadic binds with pure Right values.
-    -- See the instance of 'Monad' for 'Concur'.
-    { runConcur :: ProgramT c (NonBlocking IO) (ConcurResult a)
+    { runConcur :: ProgramT c IO (ConcurResult a)
     } deriving (G.Generic, G.Generic1)
 
 type CmdConcur c = (Cmd' [] c, Cmd'' Concur c)
@@ -475,14 +468,17 @@ instance Show (Concur c a) where
 instance Functor (Concur c) where
     fmap f (Concur m) = Concur $ (fmap f) <$> m
 
--- | Applicative instand allows building up list of commands without blocking
+-- | Applicative instance allows building up list of commands without IO
 instance Applicative (Concur c) where
     pure = Concur . pure . pure
     (Concur f) <*> (Concur a) = Concur $ liftA2 (<*>) f a
 
--- Monad instance can't build commands without blocking.
--- Once a ConcurRead blocking IO is returned, then all subsequent binds require another nested bus.
--- So it is more efficient to groups of pure binds first before binding with blocking code.
+instance (CmdConcur c) => MonadIO (Concur c) where
+    liftIO m = Concur @c $ lift $ ConcurPure <$> m
+
+-- Monad instance can't build commands without IO.
+-- Once a ConcurRead IO is returned, then all subsequent binds require another nested bus.
+-- So it is more efficient to groups of pure binds first before binding with IO code.
 -- See the instance of 'Monad' for 'Concur'.
 instance (CmdConcur c) => Monad (Concur c) where
     m >>= k = Concur $ do
@@ -519,7 +515,7 @@ instance CmdConcur c => MonadCodify (Concur c) where
 instance CmdConcur c => MonadProgram (Concur c) where
     instruct = Concur . fmap ConcurPure . instruct
 
--- | This instance makes usages of 'exec'' concurrent when used
+-- | This instance makes usages of 'delegate' and 'delegatify' concurrent when used
 -- inside a 'concurringly' or 'concurringly_' block.
 -- Converts a command that requires a handler to a Concur monad
 -- so that the do notation can be used to compose the handler for that command.
@@ -530,11 +526,14 @@ instance CmdConcur c => MonadDelegate (Concur c) where
         void $ runConcur $ f (\a -> Concur @c $ lift $ ConcurPure <$> send a)
         pure $ ConcurRead recv
 
--- | Passthrough instance
-instance CmdConcur c => Also a (Concur c) where
-    alsoZero = finish (pure ())
+instance CmdConcur c => Monoid (Concur c a) where
+    mempty = finish (pure ())
+#if !MIN_VERSION_base(4,11,0)
+    mappend = <>
+#endif
 
-    f `also` g = delegate $ \fire -> Concur $ do
+instance CmdConcur c => Semigroup (Concur c a) where
+    f <> g = delegate $ \fire -> Concur $ do
         (x, y) <- liftA2 (,) (runConcur f) (runConcur g)
         case (x, y) of
             (ConcurPure x', ConcurPure y') ->
@@ -555,8 +554,6 @@ instance CmdConcur c => Also a (Concur c) where
                 scheduleConcur fire y'
                 pure $ ConcurPure ()
       where
-        -- forkIO for the potentially blocking IO
-        -- y' :: IO a
         -- Aim: convert the Concur IO effects into a command to be interpreted
         -- first, wrap the IO we want to run into a Concur, then fmap it
         -- to convert @Concur c a@ to @Concur c c@
@@ -567,12 +564,3 @@ instance CmdConcur c => Also a (Concur c) where
             -- to convert @Concur c ()@ to @Concur c c@
             -- then command' converts @Concur c c@ to a @c@
             (\a -> command' $ command_ <$> (fire a))
-
-instance CmdConcur c => Monoid (Concur c a) where
-    mempty = alsoZero
-#if !MIN_VERSION_base(4,11,0)
-    mappend = also
-#endif
-
-instance CmdConcur c => Semigroup (Concur c a) where
-    (<>) = also
