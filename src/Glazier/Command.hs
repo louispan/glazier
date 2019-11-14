@@ -66,6 +66,7 @@ import Control.Monad.RWS.Strict as Strict
 import Control.Monad.State.Lazy as Lazy
 import Control.Monad.State.Strict as Strict
 import Control.Monad.Trans.Cont
+import Control.Monad.Trans.ACont
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Identity
 import Control.Monad.Trans.Maybe
@@ -101,6 +102,7 @@ type instance Command (Lazy.WriterT w m) = Command m
 type instance Command (Strict.RWST r w s m) = Command m
 type instance Command (Lazy.RWST r w s m) = Command m
 type instance Command (ContT r m) = Command m
+type instance Command (AContT r m) = Command m
 type instance Command (MaybeT m) = Command m
 type instance Command (ExceptT e m) = Command m
 
@@ -269,6 +271,12 @@ instance MonadCodify m => MonadCodify (ContT () m) where
     codify f = lift . codify $ evalContT . f
 
 instance MonadProgram m => MonadProgram (ContT a m) where
+    instruct = lift . instruct
+
+instance MonadCodify m => MonadCodify (AContT () m) where
+    codify f = lift . codify $ evalAContT . f
+
+instance MonadProgram m => MonadProgram (AContT a m) where
     instruct = lift . instruct
 
 -- | Passthrough instance, using the Reader context
@@ -526,8 +534,9 @@ instance CmdConcur c => MonadDelegate (Concur c) where
         void $ runConcur $ f (\a -> Concur @c $ lift $ ConcurPure <$> send a)
         pure $ ConcurRead recv
 
-    -- need to result in a monad that will read a single @()@ instead of a list of @a@s
-    discharges f m = instruct . command' $ codifyConcur f <$> m
+instance CmdConcur c => MonadDischarge (Concur c) where
+    -- result in a monad that will read a single @()@ instead of a list of @a@s
+    discharge f m = instruct . command' $ codifyConcur f <$> m
 
 instance CmdConcur c => Monoid (Concur c a) where
     mempty = finish (pure ())
