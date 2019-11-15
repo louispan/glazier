@@ -196,15 +196,15 @@ ioProgram = do
     exec' $ PutStrLn "Write two things"
     evalContT $ do
         -- Use the continuation monad to compose the function to pass into GetLine
-        a1 <- sequentially . delegatify $ exec' . GetLine
-        a2 <- sequentially . delegatify $ exec' . GetLine
+        a1 <- delegatify $ exec' . GetLine
+        a2 <- delegatify $ exec' . GetLine
         -- Do something monadic/different based on the return value.
         case a1 of
             "secret" -> exec' $ PutStrLn "Easter egg!"
             _ -> do
                 exec' $ PutStrLn "Write something else"
                 -- more GetLine input
-                b <- sequentially . delegatify $ exec' . GetLine
+                b <- delegatify $ exec' . GetLine
                 exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | using only concur
@@ -256,7 +256,7 @@ ioProgramWithConcur = do
             _ -> do
                 exec' $ PutStrLn "Write something else"
                 -- more GetLine input, but sequentially
-                b <- sequentially . delegatify $ exec' . GetLine
+                b <- delegatify $ exec' . GetLine
                 exec' $ PutStrLn $ "You wrote: (" <> a1 <> ", " <> a2 <> ") then " <> b
 
 -- | Program using both effects
