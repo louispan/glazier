@@ -536,43 +536,43 @@ instance CmdConcur c => MonadDelegate (Concur c) where
 
 instance CmdConcur c => MonadDischarge (Concur c) where
     -- result in a monad that will read a single @()@ instead of a list of @a@s
-    discharge f m = instruct . command' $ codifyConcur f <$> m
+    discharge m f = instruct . command' $ codifyConcur f <$> m
 
-instance CmdConcur c => Monoid (Concur c a) where
-    mempty = finish (pure ())
-#if !MIN_VERSION_base(4,11,0)
-    mappend = <>
-#endif
+-- instance CmdConcur c => Monoid (Concur c a) where
+--     mempty = finish
+-- #if !MIN_VERSION_base(4,11,0)
+--     mappend = <>
+-- #endif
 
-instance CmdConcur c => Semigroup (Concur c a) where
-    f <> g = delegate $ \fire -> Concur $ do
-        (x, y) <- liftA2 (,) (runConcur f) (runConcur g)
-        case (x, y) of
-            (ConcurPure x', ConcurPure y') ->
-                -- purely fire both results straight awy
-                (runConcur $ fire x') *> (runConcur $ fire y')
-            (ConcurPure x', ConcurRead y') -> do
-                -- fire the pure Right bit straight away
-                void . runConcur $ fire x'
-                scheduleConcur fire y'
-                pure $ ConcurPure ()
-            (ConcurRead x', ConcurPure y') -> do
-                -- fire the pure Right bit straight away
-                void . runConcur $ fire y'
-                scheduleConcur fire x'
-                pure $ ConcurPure ()
-            (ConcurRead x', ConcurRead y') -> do
-                scheduleConcur fire x'
-                scheduleConcur fire y'
-                pure $ ConcurPure ()
-      where
-        -- Aim: convert the Concur IO effects into a command to be interpreted
-        -- first, wrap the IO we want to run into a Concur, then fmap it
-        -- to convert @Concur c a@ to @Concur c c@
-        scheduleConcur fire ma = exec' $ flip fmap (Concur @c $ pure $ ConcurRead ma)
-            -- goal :: a -> c
-            -- Given the result of @a@, run through the @fire@
-            -- to get the resultant @Concur c ()@, then fmap it
-            -- to convert @Concur c ()@ to @Concur c c@
-            -- then command' converts @Concur c c@ to a @c@
-            (\a -> command' $ command_ <$> (fire a))
+-- instance CmdConcur c => Semigroup (Concur c a) where
+--     f <> g = delegate $ \fire -> Concur $ do
+--         (x, y) <- liftA2 (,) (runConcur f) (runConcur g)
+--         case (x, y) of
+--             (ConcurPure x', ConcurPure y') ->
+--                 -- purely fire both results straight awy
+--                 (runConcur $ fire x') *> (runConcur $ fire y')
+--             (ConcurPure x', ConcurRead y') -> do
+--                 -- fire the pure Right bit straight away
+--                 void . runConcur $ fire x'
+--                 scheduleConcur fire y'
+--                 pure $ ConcurPure ()
+--             (ConcurRead x', ConcurPure y') -> do
+--                 -- fire the pure Right bit straight away
+--                 void . runConcur $ fire y'
+--                 scheduleConcur fire x'
+--                 pure $ ConcurPure ()
+--             (ConcurRead x', ConcurRead y') -> do
+--                 scheduleConcur fire x'
+--                 scheduleConcur fire y'
+--                 pure $ ConcurPure ()
+--       where
+--         -- Aim: convert the Concur IO effects into a command to be interpreted
+--         -- first, wrap the IO we want to run into a Concur, then fmap it
+--         -- to convert @Concur c a@ to @Concur c c@
+--         scheduleConcur fire ma = exec' $ flip fmap (Concur @c $ pure $ ConcurRead ma)
+--             -- goal :: a -> c
+--             -- Given the result of @a@, run through the @fire@
+--             -- to get the resultant @Concur c ()@, then fmap it
+--             -- to convert @Concur c ()@ to @Concur c c@
+--             -- then command' converts @Concur c c@ to a @c@
+--             (\a -> command' $ command_ <$> (fire a))
