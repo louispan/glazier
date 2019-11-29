@@ -65,8 +65,8 @@ import Control.Monad.RWS.Lazy as Lazy
 import Control.Monad.RWS.Strict as Strict
 import Control.Monad.State.Lazy as Lazy
 import Control.Monad.State.Strict as Strict
-import Control.Monad.Trans.Cont
 import Control.Monad.Trans.ACont
+import Control.Monad.Trans.Cont
 import Control.Monad.Trans.Except
 import Control.Monad.Trans.Identity
 import Control.Monad.Trans.Maybe
