@@ -301,29 +301,17 @@ instance (Monoid w, MonadProgram m) => MonadProgram (Strict.WriterT w m) where
     instruct = lift . instruct
 
 -- | This instance ignores that the handler result might be Nothing.
--- This means a 'empty' handler result doesn't pre-empt and stop other handler from running.
--- FIXME: This is not symmetric with ExceptT!
--- This instance means a layer like ContT () (MaybeT Program) a
--- which is an instance of Discharge
+-- This means a 'empty' handler result doesn't pre-empt and stop other handlers from running.
 instance MonadCodify m => MonadCodify (MaybeT m) where
     codify f = lift . codify $ void . runMaybeT . f
 
 instance MonadProgram m => MonadProgram (MaybeT m) where
     instruct = lift . instruct
 
--- | Instance which requires the inner monad to be a 'MonadDelegate'.
--- This means that the @Left e@ case can be handled by the provided delegate.
--- This instance means a layer like Except e (ContT () Program) a
--- which is not an instance of Discharge
+-- | This instance ignores that the handler result might be Left.
+-- This means a 'empty' handler result doesn't pre-empt and stop other handlers from running.
 instance (MonadDelegate m, MonadCodify m) => MonadCodify (ExceptT e m) where
-    codify f = ExceptT $ delegate $ \kec -> do
-        let g a = do
-                e <- runExceptT $ f a
-                case e of
-                    Left e' -> kec (Left e')
-                    Right _ -> pure ()
-        g' <- codify g
-        kec (Right g')
+    codify f = lift . codify $ void . runExceptT . f
 
 instance MonadProgram m => MonadProgram (ExceptT e m) where
     instruct = lift . instruct
